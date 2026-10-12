@@ -112,7 +112,7 @@ QHash<int, QByteArray> RecentModel::roleNames() const
     return {{NameRole, "name"},
             {FolderRole, "folder"},
             {PathRole, "path"},
-            {ActionRole, "action"},
+            {ActionRole, "syncAction"},
             {ActionTextRole, "actionText"},
             {ActionIconRole, "actionIcon"},
             {TimeTextRole, "timeText"},

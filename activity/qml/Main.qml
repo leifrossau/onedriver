@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls as QQC2
 import QtQuick.Layouts
@@ -156,7 +158,7 @@ Window {
                             required property string iconName
 
                             Layout.fillWidth: true
-                            onClicked: win.backend.openFolder(path)
+                            onClicked: win.backend.openFolder(tRow.path)
 
                             contentItem: RowLayout {
                                 spacing: Kirigami.Units.largeSpacing
@@ -231,14 +233,14 @@ Window {
                             required property string name
                             required property string folder
                             required property string path
-                            required property string action
+                            required property string syncAction
                             required property string actionText
                             required property string actionIcon
                             required property string timeText
                             required property string iconName
 
                             Layout.fillWidth: true
-                            onClicked: win.backend.openFile(path)
+                            onClicked: win.backend.openFile(rRow.path)
 
                             TapHandler {
                                 acceptedButtons: Qt.RightButton
@@ -255,7 +257,7 @@ Window {
                                 QQC2.MenuItem {
                                     text: qsTr("View online")
                                     icon.name: "internet-services"
-                                    enabled: rRow.action !== "deleted"
+                                    enabled: rRow.syncAction !== "deleted"
                                     onTriggered: win.backend.viewOnline(rRow.path)
                                 }
                             }
@@ -282,8 +284,8 @@ Window {
                                             source: rRow.actionIcon
                                             implicitWidth: Kirigami.Units.iconSizes.small
                                             implicitHeight: Kirigami.Units.iconSizes.small
-                                            color: rRow.action === "error" ? Kirigami.Theme.negativeTextColor
-                                                 : rRow.action === "conflict" ? Kirigami.Theme.neutralTextColor
+                                            color: rRow.syncAction === "error" ? Kirigami.Theme.negativeTextColor
+                                                 : rRow.syncAction === "conflict" ? Kirigami.Theme.neutralTextColor
                                                  : Kirigami.Theme.textColor
                                         }
                                         QQC2.Label {
