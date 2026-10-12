@@ -422,6 +422,7 @@ func (f *Filesystem) Mknod(cancel <-chan struct{}, in *fuse.MknodIn, name string
 		Str("mode", Octal(in.Mode)).
 		Msg("Creating inode.")
 	out.NodeId = f.InsertChild(parentID, inode)
+	f.stateChanged(inode.ID())
 	out.Attr = inode.makeAttr()
 	out.SetAttrTimeout(timeout)
 	out.SetEntryTimeout(timeout)
@@ -460,6 +461,7 @@ func (f *Filesystem) create(cancel <-chan struct{}, in *fuse.CreateIn, name stri
 		child.DriveItem.Size = 0
 		child.hasChanges = true
 		child.Unlock()
+		f.stateChanged(child.ID())
 		return fuse.OK
 	}
 	// no further initialized required to open the file, it's empty
@@ -679,6 +681,7 @@ func (f *Filesystem) downloadContent(ctx zerolog.Logger, inode *Inode, fd *os.Fi
 	defer f.transfers.remove(id, status.DirDownload)
 	st := f.fetchContent(ctx, inode, fd, remoteHash)
 	if st == fuse.OK {
+		f.stateChanged(id)
 		f.recordActivity(inode.Path(), status.ActionDownloaded)
 	}
 	return st
@@ -800,6 +803,7 @@ func (f *Filesystem) Unlink(cancel <-chan struct{}, in *fuse.InHeader, name stri
 		}
 	}
 
+	f.changes.notePath(relPath(path))
 	f.DeleteID(id)
 	f.content.Delete(id)
 	return fuse.OK
@@ -876,6 +880,7 @@ func (f *Filesystem) Write(cancel <-chan struct{}, in *fuse.WriteIn, data []byte
 	if !inode.hasChanges {
 		// content is about to diverge from the verified state
 		f.verifiedForget(id)
+		f.stateChanged(id)
 	}
 	inode.hasChanges = true
 	return uint32(n), fuse.OK
@@ -915,6 +920,7 @@ func (f *Filesystem) Fsync(cancel <-chan struct{}, in *fuse.FsyncIn) fuse.Status
 		inode.DriveItem.File.Hashes.QuickXorHash = graph.QuickXORHashStream(fd)
 		inode.Unlock()
 
+		f.stateChanged(id)
 		if err := f.uploads.queueReservedUpload(inode, id); err != nil {
 			ctx.Error().Err(err).Msg("Error creating upload session.")
 			return fuse.EREMOTEIO
@@ -1025,6 +1031,9 @@ func (f *Filesystem) SetAttr(cancel <-chan struct{}, in *fuse.SetAttrIn, out *fu
 		// the unix syscall does not update the seek position, so neither should we
 		fd.Truncate(int64(size))
 		i.DriveItem.Size = size
+		if !i.hasChanges {
+			f.stateChanged(i.DriveItem.ID)
+		}
 		i.hasChanges = true
 	}
 

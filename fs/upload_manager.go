@@ -179,6 +179,7 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 							u.tr().setDone(id, status.DirUpload, done)
 						}
 						u.tr().setState(session.ID, status.DirUpload, status.TransferActive)
+						u.touch(session.ID)
 						go session.Upload(u.auth)
 					}
 
@@ -188,6 +189,7 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 						// retry, until the user logged in again
 						session.setState(uploadNotStarted, nil)
 						u.tr().setState(session.ID, status.DirUpload, status.TransferRetrying)
+						u.touch(session.ID)
 						continue
 					}
 					session.retries++
@@ -227,6 +229,7 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 						Msg("Upload session failed, will retry from beginning.")
 					session.cancel(u.auth) // cancel large sessions
 					u.tr().setState(session.ID, status.DirUpload, status.TransferRetrying)
+					u.touch(session.ID)
 					session.setState(uploadNotStarted, nil)
 
 				case uploadComplete:
@@ -296,11 +299,18 @@ func (u *UploadManager) reserveUpload(id string) {
 	id = u.resolveLocked(id)
 	u.reserved[id]++
 	u.tr().queue(id, status.DirUpload, "", 0)
+	u.touch(id)
 	u.sessionsM.Unlock()
 }
 
 // tr returns the transfer registry (nil, and thus a no-op, without a
 // filesystem).
+func (u *UploadManager) touch(id string) {
+	if u.fs != nil {
+		u.fs.stateChanged(id)
+	}
+}
+
 func (u *UploadManager) tr() *transferRegistry {
 	if u.fs == nil {
 		return nil

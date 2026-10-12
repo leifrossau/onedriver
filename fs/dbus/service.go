@@ -34,6 +34,9 @@ type Backend interface {
 	Transfers() []status.Transfer
 	// TransfersVersion changes whenever Transfers may return something new
 	TransfersVersion() uint64
+	// TakeChangedPaths returns and clears the paths (relative to the
+	// mountpoint) whose file state changed since the last call
+	TakeChangedPaths() []string
 	Subscribe(handler func(status.Notification)) (cancel func())
 	// ErrNotFound reporting: errors for which IsNotFound is true map to
 	// org.freedesktop.DBus.Error.FileNotFound
@@ -50,6 +53,11 @@ const (
 
 	// TransfersChanged is emitted at most this often
 	transfersInterval = 250 * time.Millisecond
+
+	// FileStatesChanged is emitted at most this often, with at most
+	// maxStatePaths paths
+	statesInterval = 250 * time.Millisecond
+	maxStatePaths  = 500
 )
 
 // Service is the exported D-Bus object of one mount.
@@ -136,6 +144,8 @@ func (s *Service) loop() {
 	defer ticker.Stop()
 	transfersTicker := time.NewTicker(transfersInterval)
 	defer transfersTicker.Stop()
+	statesTicker := time.NewTicker(statesInterval)
+	defer statesTicker.Stop()
 	last := s.properties()
 	lastTransfers := s.backend.TransfersVersion()
 	for {
@@ -148,6 +158,15 @@ func (s *Service) loop() {
 				if err := s.conn.Emit(ObjectPath, Interface+".TransfersChanged"); err != nil {
 					log.Debug().Err(err).Msg("Could not emit D-Bus TransfersChanged signal.")
 				}
+			}
+		case <-statesTicker.C:
+			paths := s.backend.TakeChangedPaths()
+			if len(paths) == 0 {
+				continue
+			}
+			paths = CollapsePaths(paths, maxStatePaths)
+			if err := s.conn.Emit(ObjectPath, Interface+".FileStatesChanged", paths); err != nil {
+				log.Debug().Err(err).Msg("Could not emit D-Bus FileStatesChanged signal.")
 			}
 		case n := <-s.notifyCh:
 			err := s.conn.Emit(ObjectPath, Interface+".Notify", n.Kind, n.Path, n.Message)
@@ -173,6 +192,41 @@ func (s *Service) loop() {
 			}
 		}
 	}
+}
+
+// CollapsePaths deduplicates paths and, if there are more than max, replaces
+// them by their unique parent folders; if there are still more than max, by
+// the mount root "".
+func CollapsePaths(paths []string, max int) []string {
+	uniq := func(in []string, f func(string) string) []string {
+		seen := make(map[string]struct{}, len(in))
+		out := make([]string, 0, len(in))
+		for _, p := range in {
+			if f != nil {
+				p = f(p)
+			}
+			if _, dup := seen[p]; !dup {
+				seen[p] = struct{}{}
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	out := uniq(paths, nil)
+	if len(out) <= max {
+		return out
+	}
+	out = uniq(out, func(p string) string {
+		d := filepath.Dir(p)
+		if d == "." || d == "/" {
+			return ""
+		}
+		return d
+	})
+	if len(out) <= max {
+		return out
+	}
+	return []string{""}
 }
 
 // properties returns all properties as variants.
@@ -390,6 +444,7 @@ func introspectionNode() *introspect.Node {
 						arg("kind", "s", ""), arg("path", "s", ""), arg("message", "s", ""),
 					}},
 					{Name: "TransfersChanged"},
+					{Name: "FileStatesChanged", Args: []introspect.Arg{arg("paths", "as", "")}},
 				},
 				Properties: []introspect.Property{
 					prop("MountPoint", "s"), prop("Account", "s"), prop("State", "s"),
