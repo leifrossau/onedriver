@@ -18,6 +18,8 @@ tmp/
 *.test
 *.out
 *.txt
+!activity/CMakeLists.txt
+!activity/tests/CMakeLists.txt
 *.coverage
 *.core
 *.gdb

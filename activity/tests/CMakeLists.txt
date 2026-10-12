@@ -1,0 +1,6 @@
+foreach(t helpers models)
+    qt_add_executable(test_${t} test_${t}.cpp)
+    target_link_libraries(test_${t} PRIVATE activity-core Qt6::Test)
+    add_test(NAME ${t} COMMAND test_${t})
+    set_tests_properties(${t} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;LC_ALL=C.UTF-8")
+endforeach()

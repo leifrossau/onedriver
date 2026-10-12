@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Onedriver activity
+Comment=Show what OneDrive is syncing right now.
+Type=Application
+Exec=/usr/bin/onedriver-activity
+Icon=/usr/share/icons/onedriver/onedriver.svg
+Categories=Utility;
+NoDisplay=true
