@@ -563,7 +563,7 @@ func (f *Filesystem) open(cancel <-chan struct{}, in *fuse.OpenIn, out *fuse.Ope
 	// while hashing or downloading, so GetAttr/Lookup/ReadDirPlus on this
 	// inode are not blocked. Concurrent Opens of the same file are serialized
 	// by the per-ID download lock instead.
-	for {
+	for attempt := 0; ; attempt++ {
 		inode.RLock()
 		hasChanges := inode.hasChanges
 		remoteHash := ""
@@ -589,6 +589,13 @@ func (f *Filesystem) open(cancel <-chan struct{}, in *fuse.OpenIn, out *fuse.Ope
 		}
 		status := f.downloadContent(ctx, inode, fd, remoteHash)
 		unlock()
+		if status == fuse.EAGAIN && attempt < 3 {
+			// the inode was replaced while downloading, retry with the new one
+			if inode = f.GetID(id); inode == nil {
+				return fuse.ENOENT
+			}
+			continue
+		}
 		return status
 	}
 }
@@ -681,10 +688,15 @@ func (f *Filesystem) downloadContent(ctx zerolog.Logger, inode *Inode, fd *os.Fi
 
 	inode.Lock()
 	defer inode.Unlock()
-	if f.GetID(id) != inode {
-		// deleted or re-ID'd while downloading
+	if current := f.GetID(id); current != inode {
+		// Deleted, re-ID'd or replaced (e.g. by a delta) while downloading.
+		// Don't report success: the cache file was never filled, so the
+		// caller would read empty content.
 		ctx.Warn().Msg("Inode changed during download, discarding content.")
-		return fuse.OK
+		if current == nil {
+			return fuse.ENOENT
+		}
+		return fuse.EAGAIN
 	}
 	if inode.hasChanges {
 		ctx.Warn().Msg("Local changes made during download, keeping local content.")
