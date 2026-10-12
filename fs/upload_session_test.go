@@ -85,6 +85,7 @@ func TestUploadSessionSmallFS(t *testing.T) {
 		}, retrySeconds, time.Second, "Remote content never matched \"%s\"", want)
 	}
 	waitForRemoteContent(data)
+	waitForRemoteID(t, "/onedriver_tests/uploadSessionSmallFS.txt")
 
 	// upload it again to ensure uploads with an existing remote id succeed
 	data = []byte("more super special data")

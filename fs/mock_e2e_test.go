@@ -24,6 +24,13 @@ import (
 // created on the server first, and its local path inside the mount returned.
 func mountMock(t *testing.T, remoteDir string) string {
 	t.Helper()
+	dir, _ := mountMockFS(t, remoteDir)
+	return dir
+}
+
+// mountMockFS is mountMock, but also returns the mounted Filesystem.
+func mountMockFS(t *testing.T, remoteDir string) (string, *Filesystem) {
+	t.Helper()
 	if mock == nil {
 		t.Skip("needs the mock Graph server (unset ONEDRIVER_TEST_LIVE)")
 	}
@@ -48,7 +55,7 @@ func mountMock(t *testing.T, remoteDir string) string {
 		}
 		os.Remove(mnt)
 	})
-	return filepath.Join(mnt, remoteDir)
+	return filepath.Join(mnt, remoteDir), cache
 }
 
 func getState(t *testing.T, fname string) string {
@@ -196,4 +203,122 @@ func TestDeltaRemoteEditNoConflict(t *testing.T) {
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 	assert.Len(t, entries, 1, "unexpected conflict copy")
+}
+
+// BUG: a server-side rename that arrives (via delta) after our own upload
+// reached the server but before the upload manager noticed it had completed is
+// lost. applyDelta cannot match the delta to the still-local-ID inode (the name
+// differs), so it inserts a second inode for the new ID; then the upload
+// manager's MoveID(local -> remote) replaces it, and the file keeps its old
+// name locally even though the delta is never repeated.
+//
+// The race window is up to one upload manager tick, so this loops a few times
+// to hit it reliably. Skipped by default so the suite stays green; run with
+// ONEDRIVER_TEST_KNOWN_BUGS=1 to see it fail.
+func TestDeltaRenameWhileUploadCompletes(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("ONEDRIVER_TEST_KNOWN_BUGS") != "1" {
+		t.Skip("known bug (see comment), run with ONEDRIVER_TEST_KNOWN_BUGS=1")
+	}
+	const remoteDir = "/e2e_rename_race"
+	dir := mountMock(t, remoteDir)
+
+	for i := 0; i < 6; i++ {
+		oldName, newName := fmt.Sprintf("old%d.txt", i), fmt.Sprintf("new%d.txt", i)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, oldName), []byte("content"), 0644))
+
+		var id string
+		require.Eventually(t, func() bool {
+			id = mock.ID(remoteDir + "/" + oldName)
+			return id != ""
+		}, 10*time.Second, 5*time.Millisecond)
+		require.NoError(t, mock.Move(id, newName, ""))
+
+		assert.Eventuallyf(t, func() bool {
+			_, errNew := os.Stat(filepath.Join(dir, newName))
+			_, errOld := os.Stat(filepath.Join(dir, oldName))
+			return errNew == nil && errOld != nil
+		}, 15*time.Second, 200*time.Millisecond,
+			"iteration %d: server-side rename of %s to %s was lost locally", i, oldName, newName)
+	}
+}
+
+// BUG: UploadManager.inFlight leaks a slot every time an errored upload is
+// retried (upload_manager.go: inFlight++ whenever a NotStarted session is
+// started, including after uploadErrored resets it, but only finishUpload
+// decrements). The same happens whenever a started session is replaced by a
+// newer one for the same item. After maxUploadsInFlight leaks the manager
+// silently stops starting any upload, so one file whose upload keeps failing
+// stalls the whole mount.
+//
+// Skipped by default; run with ONEDRIVER_TEST_KNOWN_BUGS=1 to see it fail.
+func TestUploadManagerInFlightLeak(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("ONEDRIVER_TEST_KNOWN_BUGS") != "1" {
+		t.Skip("known bug (see comment), run with ONEDRIVER_TEST_KNOWN_BUGS=1")
+	}
+	const remoteDir = "/e2e_inflight"
+	dir := mountMock(t, remoteDir)
+
+	// one file whose upload is rejected until the manager has retried it and
+	// finally given up on it
+	mock.FailUploads(remoteDir+"/bad.txt", 400)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "bad.txt"), []byte("bad"), 0644))
+	require.Eventually(t, func() bool {
+		attempts := 0
+		for _, r := range mock.Requests() {
+			if strings.HasPrefix(r, "PUT ") && strings.Contains(r, "bad.txt") {
+				attempts++
+			}
+		}
+		return attempts >= maxUploadsInFlight
+	}, 60*time.Second, 200*time.Millisecond, "upload manager did not retry the failing upload")
+	mock.StopFailingUploads(remoteDir + "/bad.txt")
+
+	// nothing else is uploading, so a brand new file must upload
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "after.txt"), []byte("after"), 0644))
+	assert.Eventually(t, func() bool {
+		got, ok := mock.ContentPath(remoteDir + "/after.txt")
+		return ok && string(got) == "after"
+	}, 20*time.Second, 200*time.Millisecond, "upload manager is stuck: inFlight slots leaked")
+}
+
+// BUG: a file that is rewritten while its first upload is in flight is never
+// uploaded again if the server-side copy shows up in delta before the upload
+// manager notices the first upload completed: applyDelta calls
+// MoveID(local -> remote) ("Local item already exists under different ID"),
+// and MoveID uses DeleteID, which calls UploadManager.CancelUpload and so drops
+// the queued second session. The local copy has the new content (and
+// hasChanges == false), the server keeps the old one, silently.
+// MovePath was already switched to deleteID for exactly this reason.
+//
+// Skipped by default; run with ONEDRIVER_TEST_KNOWN_BUGS=1 to see it fail.
+func TestRewriteDuringUploadIsNotLost(t *testing.T) {
+	t.Parallel()
+	if os.Getenv("ONEDRIVER_TEST_KNOWN_BUGS") != "1" {
+		t.Skip("known bug (see comment), run with ONEDRIVER_TEST_KNOWN_BUGS=1")
+	}
+	const remoteDir = "/e2e_rewrite"
+	dir := mountMock(t, remoteDir)
+	fname := filepath.Join(dir, "file.txt")
+	remote := remoteDir + "/file.txt"
+
+	mock.PauseUploads(remote)
+	defer mock.ResumeUploads(remote)
+	require.NoError(t, os.WriteFile(fname, []byte("first"), 0644))
+	require.Eventually(t, func() bool { // first upload started, held at the server
+		for _, r := range mock.Requests() {
+			if strings.HasPrefix(r, "PUT ") && strings.Contains(r, "file.txt") {
+				return true
+			}
+		}
+		return false
+	}, 10*time.Second, 20*time.Millisecond)
+	require.NoError(t, os.WriteFile(fname, []byte("second"), 0644))
+	mock.ResumeUploads(remote)
+
+	assert.Eventually(t, func() bool {
+		got, _ := mock.ContentPath(remote)
+		return string(got) == "second"
+	}, 20*time.Second, 200*time.Millisecond, "the second write was never uploaded")
 }

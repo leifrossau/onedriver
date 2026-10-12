@@ -68,6 +68,7 @@ type Server struct {
 	pauseMu sync.Mutex
 	pauseCV *sync.Cond
 	paused  map[string]bool // path prefixes whose uploads are held
+	failing map[string]int  // path prefixes whose uploads are rejected, by status
 
 	reqMu    sync.Mutex
 	requests []string
@@ -80,6 +81,7 @@ func New() *Server {
 		nodes:   make(map[string]*node),
 		uploads: make(map[string]*uploadSession),
 		paused:  make(map[string]bool),
+		failing: make(map[string]int),
 	}
 	s.pauseCV = sync.NewCond(&s.pauseMu)
 	now := time.Now().UTC()
@@ -130,13 +132,45 @@ func (s *Server) ResumeUploads(pathPrefix string) {
 	s.pauseCV.Broadcast()
 }
 
+func under(p, prefix string) bool {
+	return prefix == "/" || p == prefix || strings.HasPrefix(p, prefix+"/")
+}
+
 func (s *Server) isPaused(p string) bool {
 	for prefix := range s.paused {
-		if prefix == "/" || p == prefix || strings.HasPrefix(p, prefix+"/") {
+		if under(p, prefix) {
 			return true
 		}
 	}
 	return false
+}
+
+// FailUploads makes all requests that write file content for items at or below
+// pathPrefix fail with the given HTTP status (e.g. 400 or 503) until
+// StopFailingUploads is called with the same prefix.
+func (s *Server) FailUploads(pathPrefix string, status int) {
+	s.pauseMu.Lock()
+	defer s.pauseMu.Unlock()
+	s.failing[path.Clean("/"+pathPrefix)] = status
+}
+
+// StopFailingUploads undoes FailUploads.
+func (s *Server) StopFailingUploads(pathPrefix string) {
+	s.pauseMu.Lock()
+	defer s.pauseMu.Unlock()
+	delete(s.failing, path.Clean("/"+pathPrefix))
+}
+
+// failStatus returns the status uploads to p must fail with, or 0.
+func (s *Server) failStatus(p string) int {
+	s.pauseMu.Lock()
+	defer s.pauseMu.Unlock()
+	for prefix, status := range s.failing {
+		if under(p, prefix) {
+			return status
+		}
+	}
+	return 0
 }
 
 // waitPaused blocks while uploads to path p are paused.

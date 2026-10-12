@@ -186,6 +186,10 @@ func (s *Server) graph(w http.ResponseWriter, r *http.Request, p string) {
 		target := s.targetPath(s.parseTarget(rest))
 		s.mu.Unlock()
 		s.waitPaused(target)
+		if status := s.failStatus(target); status != 0 {
+			writeErr(w, status, "mockInjectedFailure", "upload failure injected by the test")
+			return
+		}
 	}
 
 	s.mu.Lock()
@@ -543,6 +547,10 @@ func (s *Server) uploadChunk(w http.ResponseWriter, r *http.Request, id string) 
 	if sess != nil && r.Method == http.MethodPut {
 		s.mu.Unlock()
 		s.waitPaused(sess.path)
+		if status := s.failStatus(sess.path); status != 0 {
+			writeErr(w, status, "mockInjectedFailure", "upload failure injected by the test")
+			return
+		}
 		s.mu.Lock()
 		sess = s.uploads[id]
 	}

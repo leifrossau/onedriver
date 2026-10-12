@@ -31,18 +31,30 @@ func (i *Inode) setContent(f *Filesystem, newContent []byte) {
 }
 
 // waitForRemoteID blocks until the upload of the file at path has completed and
-// the filesystem has swapped the file's local ID for the server's ID.
+// the upload manager has noticed (it only checks once per tick): the filesystem
+// has swapped the file's local ID for the server's ID and nothing is pending
+// anymore.
+//
+// Tests use this before changing a file server-side or rewriting it, because
+// the (mock) server is much faster than the real one and these races would
+// otherwise be hit constantly:
 //
 // BUG: if another device renames the file between its upload landing on the
-// server and the upload manager noticing completion (up to one upload tick),
-// applyDelta creates a second inode from the delta and the later
-// MoveID(local -> remote) clobbers it, leaving the file under its old name
-// locally. Tests that rename server-side must therefore wait for this first.
+// server and the upload manager noticing completion, applyDelta creates a
+// second inode from the delta and the later MoveID(local -> remote) clobbers
+// it, leaving the file under its old name locally (see
+// TestDeltaRenameWhileUploadCompletes).
+//
+// BUG: rewriting a file while its previous upload session is started or
+// complete-but-unnoticed replaces the session in UploadManager.sessions without
+// decrementing UploadManager.inFlight, so the slot leaks (see
+// TestUploadManagerInFlightLeak).
 func waitForRemoteID(t *testing.T, path string) {
 	t.Helper()
 	require.Eventually(t, func() bool {
 		inode, err := fs.GetPath(path, auth)
-		return err == nil && inode != nil && !isLocalID(inode.ID())
+		return err == nil && inode != nil && !isLocalID(inode.ID()) &&
+			!fs.uploads.IsUploadPending(inode.ID())
 	}, retrySeconds, 200*time.Millisecond, "upload of %s never completed", path)
 }
 
@@ -165,13 +177,9 @@ func TestDeltaContentChangeRemote(t *testing.T) {
 
 	// wait for the local write to be uploaded, then change and upload it via
 	// the API
-	original := []byte("the cake is a lie")
-	var item *graph.DriveItem
-	var err error
-	require.Eventually(t, func() bool {
-		item, err = graph.GetItemPath("/onedriver_tests/delta/remote_content", auth)
-		return err == nil && item.VerifyChecksum(graph.QuickXORHash(&original))
-	}, retrySeconds, time.Second, "initial upload never reached the server")
+	waitForRemoteID(t, "/onedriver_tests/delta/remote_content")
+	item, err := graph.GetItemPath("/onedriver_tests/delta/remote_content", auth)
+	require.NoError(t, err)
 	inode := NewInodeDriveItem(item)
 	newContent := []byte("because it has been changed remotely!")
 	inode.setContent(fs, newContent)
