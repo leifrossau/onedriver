@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -140,6 +141,16 @@ type env struct {
 	client *dbus.Conn
 	notifs *fakeNotifications
 	ran    chan []string
+	// installed makes LookPath find onedriver-activity
+	installed atomic.Bool
+}
+
+// fakeActivity is the onedriver-activity side of Activity1.
+type fakeActivity struct{ toggles chan struct{} }
+
+func (f *fakeActivity) Toggle() *dbus.Error {
+	f.toggles <- struct{}{}
+	return nil
 }
 
 func newEnv(t *testing.T) *env {
@@ -155,6 +166,12 @@ func newEnv(t *testing.T) *env {
 	e.tray, err = NewTray(connect(t, addr), Options{
 		NotifyWindow: 150 * time.Millisecond,
 		Run:          func(name string, args ...string) { e.ran <- append([]string{name}, args...) },
+		LookPath: func(name string) (string, error) {
+			if e.installed.Load() {
+				return "/usr/bin/" + name, nil
+			}
+			return "", exec.ErrNotFound
+		},
 	})
 	require.NoError(t, err)
 	go e.tray.Run()
@@ -272,6 +289,65 @@ func TestMenuOverBusAndActions(t *testing.T) {
 	d.set("Paused", true)
 	assert.Eventually(t, func() bool { _, ok := e.layout(t).find(t, "Resume syncing"); return ok },
 		3*time.Second, 20*time.Millisecond)
+}
+
+func TestActivityToggleAndStart(t *testing.T) {
+	e := newEnv(t)
+	d := newFakeDaemon(t, e.addr, "home_u_A", "/home/u/A")
+	d.start(t)
+	require.Eventually(t, func() bool { return len(e.tray.Instances()) == 1 }, 3*time.Second, 20*time.Millisecond)
+	sniObj := e.client.Object(e.tray.sni.busName, sniPath)
+	activate := func() {
+		require.NoError(t, sniObj.Call(sniIface+".Activate", 0, int32(0), int32(0)).Err)
+	}
+	expectRun := func(want ...string) {
+		select {
+		case r := <-e.ran:
+			assert.Equal(t, want, r)
+		case <-time.After(3 * time.Second):
+			t.Fatalf("expected %v to be run", want)
+		}
+	}
+
+	// not running, not installed: falls back to the folder
+	activate()
+	expectRun("xdg-open", "/home/u/A")
+
+	// not running, installed: started
+	e.installed.Store(true)
+	activate()
+	expectRun("onedriver-activity")
+
+	// the menu item does the same
+	menu := e.client.Object(e.tray.sni.busName, menuPath)
+	id, ok := e.layout(t).find(t, "Show activity")
+	require.True(t, ok)
+	require.NoError(t, menu.Call(menuIface+".Event", 0, id, "clicked", dbus.MakeVariant(""), uint32(0)).Err)
+	expectRun("onedriver-activity")
+
+	// running: Toggle is called, nothing is started
+	act := &fakeActivity{toggles: make(chan struct{}, 4)}
+	ac := connect(t, e.addr)
+	require.NoError(t, ac.Export(act, activityObj, activityIface))
+	_, err := ac.RequestName(activityName, dbus.NameFlagDoNotQueue)
+	require.NoError(t, err)
+	activate()
+	select {
+	case <-act.toggles:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Toggle was not called")
+	}
+	require.NoError(t, menu.Call(menuIface+".Event", 0, id, "clicked", dbus.MakeVariant(""), uint32(0)).Err)
+	select {
+	case <-act.toggles:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Toggle was not called from the menu")
+	}
+	select {
+	case r := <-e.ran:
+		t.Fatalf("unexpected run %v", r)
+	case <-time.After(300 * time.Millisecond):
+	}
 }
 
 func TestNotifyBecomesNotification(t *testing.T) {

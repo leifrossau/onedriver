@@ -180,6 +180,11 @@ notifications. It talks to onedriver over D-Bus (see
 running; it starts automatically on login after installing the package. To run
 it by hand: `onedriver-tray`.
 
+A left click on the icon (or "Show activity" in the menu) toggles the activity
+window, `onedriver-activity`, which lists running and queued transfers and
+recent activity. The tray starts it if it is not running; if it is not
+installed, a left click opens the mount's folder instead.
+
 ## Pinning / free up space
 
 Files are normally only downloaded when you open them. Like "Always keep on
