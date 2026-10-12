@@ -201,6 +201,12 @@ func (s *Server) graph(w http.ResponseWriter, r *http.Request, p string) {
 		body, _ = io.ReadAll(r.Body)
 	}
 	rest := strings.TrimPrefix(p, "/me/drive/")
+	if r.Method == http.MethodGet && strings.HasSuffix(p, "/content") && !strings.Contains(p, "/thumbnails/") {
+		// without the state lock, so concurrent downloads overlap
+		if d := s.downloadDelay(); d > 0 {
+			time.Sleep(d)
+		}
+	}
 	if isUpload {
 		// uploads can block on PauseUploads, which must happen without the
 		// state lock held
@@ -238,7 +244,7 @@ func (s *Server) graph(w http.ResponseWriter, r *http.Request, p string) {
 			writeErr(w, status, "mockInjectedFailure", "download failure injected by the test")
 			return
 		}
-		serveContent(w, r, t.node)
+		s.serveContent(w, r, t.node)
 
 	case r.Method == http.MethodGet && strings.HasPrefix(t.suffix, "/thumbnails/"):
 		s.thumbnail(w, t)
@@ -349,7 +355,9 @@ func (s *Server) listChildren(w http.ResponseWriter, r *http.Request, t target) 
 	writeJSON(w, 200, resp)
 }
 
-func serveContent(w http.ResponseWriter, r *http.Request, n *node) {
+// serveContent serves an item's content, honoring "Range: bytes=a-b" (206
+// with Content-Range) and counting the served bytes.
+func (s *Server) serveContent(w http.ResponseWriter, r *http.Request, n *node) {
 	data := n.data
 	status := 200
 	if rng := r.Header.Get("Range"); strings.HasPrefix(rng, "bytes=") {
@@ -367,6 +375,10 @@ func serveContent(w http.ResponseWriter, r *http.Request, n *node) {
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, len(data)))
 		data = data[start : end+1]
 		status = 206
+	}
+	if s.noteDownload(n.id, r.Header.Get("Range"), len(data)) && len(data) > 0 {
+		data = append([]byte(nil), data...)
+		data[0] ^= 0xff
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))

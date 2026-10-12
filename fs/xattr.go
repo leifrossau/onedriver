@@ -138,7 +138,7 @@ func (f *Filesystem) syncState(inode *Inode) SyncState {
 	if f.uploads != nil {
 		state, hasSession = f.uploads.sessionState(id)
 	}
-	return combineSyncState(false, inode.HasChanges(), hasSession, state, f.content.HasContent(id))
+	return combineSyncState(false, inode.HasChanges(), hasSession, state, f.hasFullContent(id))
 }
 
 // SyncState returns the sync state of the item with the given ID. Unknown IDs

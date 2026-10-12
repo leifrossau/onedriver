@@ -48,6 +48,8 @@ type Filesystem struct {
 
 	// remembers which cached content files were hash-verified (id -> verifiedContent)
 	verified sync.Map
+	// partially downloaded files (id -> *partialFile), see ranges.go
+	partials sync.Map
 	// number of content hashes computed (test hook, see verified.go)
 	hashCount atomic.Int64
 
@@ -102,6 +104,7 @@ func NewFilesystem(auth *graph.Auth, cacheDir string) *Filesystem {
 		tx.CreateBucketIfNotExists(bucketMetadata)
 		tx.CreateBucketIfNotExists(bucketDelta)
 		tx.CreateBucketIfNotExists(bucketVerified)
+		tx.CreateBucketIfNotExists(bucketPartial)
 		versionBucket, _ := tx.CreateBucketIfNotExists(bucketVersion)
 
 		// migrate old content bucket to the local filesystem
@@ -146,10 +149,12 @@ func NewFilesystem(auth *graph.Auth, cacheDir string) *Filesystem {
 	}
 	content.onRemove = func(id string) {
 		fs.verifiedForget(id)
+		fs.partialForget(id)
 		if !strings.HasPrefix(id, "temp-") {
 			fs.stateChanged(id)
 		}
 	}
+	fs.loadPartials()
 	fs.ctl.cancelAuthHook = auth.OnRenewalFailure(fs.noteAuthFailure)
 	if auth.Expired() {
 		// started without a login (see graph.Authenticate)

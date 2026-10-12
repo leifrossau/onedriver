@@ -548,7 +548,8 @@ func (f *Filesystem) open(cancel <-chan struct{}, in *fuse.OpenIn, out *fuse.Ope
 		Logger()
 
 	flags := int(in.Flags)
-	if flags&os.O_RDWR+flags&os.O_WRONLY > 0 && f.IsOffline() {
+	writing := flags&(os.O_RDWR|os.O_WRONLY) != 0
+	if writing && f.IsOffline() {
 		ctx.Warn().
 			Bool("readWrite", flags&os.O_RDWR > 0).
 			Bool("writeOnly", flags&os.O_WRONLY > 0).
@@ -587,6 +588,20 @@ func (f *Filesystem) open(cancel <-chan struct{}, in *fuse.OpenIn, out *fuse.Ope
 			// local content is newer than the server's, never replace it
 			ctx.Debug().Msg("Using local content, file has pending changes.")
 			return fuse.OK
+		}
+
+		if !writing && remoteHash != "" {
+			// reading: content is fetched on demand by Read, see partial.go
+			status, ok := f.openLazy(ctx, inode, fd, remoteHash)
+			if ok && status == fuse.EAGAIN && attempt < 3 {
+				if inode = f.GetID(id); inode == nil {
+					return fuse.ENOENT
+				}
+				continue
+			}
+			if ok {
+				return status
+			}
 		}
 
 		if status, done := f.useCachedContent(ctx, inode, fd, remoteHash); done {
@@ -733,6 +748,11 @@ func (f *Filesystem) fetchContent(ctx zerolog.Logger, inode *Inode, fd *os.File,
 		return fuse.OK
 	}
 
+	// The content is complete from here on: stop range fetches from writing
+	// into the cache file (see partial.go).
+	wasPartial := f.isPartial(id)
+	f.partialForget(id)
+
 	if fd == nil {
 		// background download: move the verified file into place, unless
 		// somebody opened the file meanwhile (then copy into their fd below)
@@ -740,6 +760,10 @@ func (f *Filesystem) fetchContent(ctx zerolog.Logger, inode *Inode, fd *os.File,
 		installed, err := f.content.Install(id, f.content.contentPath(tempID))
 		if err != nil {
 			ctx.Error().Err(err).Msg("Could not install downloaded content.")
+			if wasPartial {
+				// the cache file still holds the incomplete content
+				f.partialStart(id, remoteHash, int64(inode.DriveItem.Size))
+			}
 			return fuse.EIO
 		}
 		if installed {
@@ -827,6 +851,13 @@ func (f *Filesystem) Read(cancel <-chan struct{}, in *fuse.ReadIn, buf []byte) (
 		Logger()
 	ctx.Trace().Msg("")
 
+	// fetch missing ranges of partially cached files (without any lock held)
+	if f.isPartial(id) {
+		if st := f.readPartial(ctx, inode, int64(in.Offset), int64(in.Size)); st != fuse.OK {
+			return fuse.ReadResultData(make([]byte, 0)), st
+		}
+	}
+
 	fd, err := f.content.Open(id)
 	if err != nil {
 		ctx.Error().Err(err).Msg("Cache Open() failed.")
@@ -867,7 +898,21 @@ func (f *Filesystem) Write(cancel <-chan struct{}, in *fuse.WriteIn, data []byte
 		return 0, fuse.EIO
 	}
 
-	inode.Lock()
+	// local changes must start from the complete content (see partial.go)
+	for attempt := 0; ; attempt++ {
+		if st := f.ensureFull(ctx, inode); st != fuse.OK {
+			ctx.Error().Msg("Could not download the rest of the file before writing to it.")
+			return 0, st
+		}
+		inode.Lock()
+		if inode.hasChanges || !f.isPartial(id) {
+			break
+		}
+		inode.Unlock()
+		if attempt >= 3 {
+			return 0, fuse.EIO
+		}
+	}
 	defer inode.Unlock()
 	n, err := fd.WriteAt(data, int64(offset))
 	if err != nil {
@@ -987,6 +1032,13 @@ func (f *Filesystem) SetAttr(cancel <-chan struct{}, in *fuse.SetAttrIn, out *fu
 	}
 	path := i.Path()
 	isDir := i.IsDir() // holds an rlock
+	if size, valid := in.GetSize(); valid && size > 0 {
+		// truncating keeps (part of) the content: make sure it is complete
+		ctx := log.With().Str("op", "SetAttr").Str("path", path).Logger()
+		if st := f.ensureFull(ctx, i); st != fuse.OK {
+			return st
+		}
+	}
 	i.Lock()
 
 	ctx := log.With().
@@ -1027,9 +1079,16 @@ func (f *Filesystem) SetAttr(cancel <-chan struct{}, in *fuse.SetAttrIn, out *fu
 			Uint64("oldSize", i.DriveItem.Size).
 			Uint64("newSize", size).
 			Msg("")
+		if size > 0 && !i.hasChanges && f.isPartial(i.DriveItem.ID) {
+			// became partial again since ensureFull above (very unlikely)
+			i.Unlock()
+			return fuse.EIO
+		}
 		fd, _ := f.content.Open(i.DriveItem.ID)
 		// the unix syscall does not update the seek position, so neither should we
 		fd.Truncate(int64(size))
+		// a partial file truncated to 0 is complete (and empty)
+		f.partialForget(i.DriveItem.ID)
 		i.DriveItem.Size = size
 		if !i.hasChanges {
 			f.stateChanged(i.DriveItem.ID)

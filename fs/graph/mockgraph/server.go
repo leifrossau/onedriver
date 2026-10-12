@@ -73,6 +73,12 @@ type Server struct {
 	failing map[string]int  // path prefixes whose uploads are rejected, by status
 	failDL  map[string]int  // path prefixes whose downloads are rejected, by status
 
+	dlMu      sync.Mutex
+	dlBytes   map[string]int64    // content bytes served, by item ID
+	dlRanges  map[string][]string // Range headers of content requests ("" = whole file), by item ID
+	dlCorrupt map[string]int      // item IDs whose next n content responses are corrupted
+	dlDelay   time.Duration       // delay before serving content
+
 	reqMu      sync.Mutex
 	requests   []string
 	tokenMode  TokenMode
@@ -115,6 +121,10 @@ func New() *Server {
 		paused:  make(map[string]bool),
 		failing: make(map[string]int),
 		failDL:  make(map[string]int),
+
+		dlBytes:   make(map[string]int64),
+		dlRanges:  make(map[string][]string),
+		dlCorrupt: make(map[string]int),
 	}
 	s.pauseCV = sync.NewCond(&s.pauseMu)
 	now := time.Now().UTC()
@@ -220,6 +230,56 @@ func (s *Server) StopFailingDownloads(pathPrefix string) {
 	s.pauseMu.Lock()
 	defer s.pauseMu.Unlock()
 	delete(s.failDL, path.Clean("/"+pathPrefix))
+}
+
+// DownloadedBytes returns how many content bytes were served for an item.
+func (s *Server) DownloadedBytes(id string) int64 {
+	s.dlMu.Lock()
+	defer s.dlMu.Unlock()
+	return s.dlBytes[id]
+}
+
+// ContentRanges returns the Range headers of all content requests for an
+// item, in order ("" for a request of the whole file).
+func (s *Server) ContentRanges(id string) []string {
+	s.dlMu.Lock()
+	defer s.dlMu.Unlock()
+	return append([]string(nil), s.dlRanges[id]...)
+}
+
+// CorruptDownloads makes the next n content responses for an item carry
+// wrong bytes (the first byte of the response is flipped).
+func (s *Server) CorruptDownloads(id string, n int) {
+	s.dlMu.Lock()
+	defer s.dlMu.Unlock()
+	s.dlCorrupt[id] = n
+}
+
+// SetDownloadDelay delays every content response by d (0 to disable).
+func (s *Server) SetDownloadDelay(d time.Duration) {
+	s.dlMu.Lock()
+	defer s.dlMu.Unlock()
+	s.dlDelay = d
+}
+
+// noteDownload records a content request and returns whether its response
+// must be corrupted.
+func (s *Server) noteDownload(id, rng string, n int) bool {
+	s.dlMu.Lock()
+	defer s.dlMu.Unlock()
+	s.dlBytes[id] += int64(n)
+	s.dlRanges[id] = append(s.dlRanges[id], rng)
+	if s.dlCorrupt[id] > 0 {
+		s.dlCorrupt[id]--
+		return true
+	}
+	return false
+}
+
+func (s *Server) downloadDelay() time.Duration {
+	s.dlMu.Lock()
+	defer s.dlMu.Unlock()
+	return s.dlDelay
 }
 
 // failDownloadStatus returns the status downloads of p must fail with, or 0.
