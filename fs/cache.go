@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -45,6 +46,8 @@ type Filesystem struct {
 
 	// remembers which cached content files were hash-verified (id -> verifiedContent)
 	verified sync.Map
+	// number of content hashes computed (test hook, see verified.go)
+	hashCount atomic.Int64
 
 	// open kernel file handles per node ID (Open/Create until Release)
 	openHandlesM sync.Mutex
@@ -58,14 +61,6 @@ type Filesystem struct {
 	stopped bool
 	stopCh  chan struct{}
 	loops   sync.WaitGroup
-}
-
-// verifiedContent records the state of a cache file when its hash was last
-// verified, so unchanged files need not be re-hashed on every open.
-type verifiedContent struct {
-	hash  string
-	size  int64
-	mtime time.Time
 }
 
 // boltdb buckets
@@ -100,6 +95,7 @@ func NewFilesystem(auth *graph.Auth, cacheDir string) *Filesystem {
 	db.Update(func(tx *bolt.Tx) error {
 		tx.CreateBucketIfNotExists(bucketMetadata)
 		tx.CreateBucketIfNotExists(bucketDelta)
+		tx.CreateBucketIfNotExists(bucketVerified)
 		versionBucket, _ := tx.CreateBucketIfNotExists(bucketVersion)
 
 		// migrate old content bucket to the local filesystem
@@ -141,6 +137,7 @@ func NewFilesystem(auth *graph.Auth, cacheDir string) *Filesystem {
 		stopCh:        make(chan struct{}),
 		ctl:           newSyncControl(),
 	}
+	content.onRemove = fs.verifiedForget
 	fs.ctl.cancelAuthHook = auth.OnRenewalFailure(fs.noteAuthFailure)
 
 	rootItem, err := graph.GetItem("root", auth)

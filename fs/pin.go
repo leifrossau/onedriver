@@ -645,8 +645,8 @@ func (f *Filesystem) contentMatches(id string, hash string) bool {
 	if err != nil || !st.Mode().IsRegular() {
 		return false
 	}
-	state := verifiedContent{hash: strings.ToLower(hash), size: st.Size(), mtime: st.ModTime()}
-	if v, ok := f.verified.Load(id); ok && v.(verifiedContent) == state {
+	state := newVerified(hash, st)
+	if v, ok := f.verifiedGet(id); ok && v.same(state) {
 		return true
 	}
 	file, err := os.Open(f.content.contentPath(id))
@@ -654,7 +654,7 @@ func (f *Filesystem) contentMatches(id string, hash string) bool {
 		return false
 	}
 	defer file.Close()
-	if !strings.EqualFold(hash, graph.QuickXORHashStream(file)) {
+	if !strings.EqualFold(hash, f.hashContent(file)) {
 		return false
 	}
 	// hashing may have raced with writes, so re-stat before trusting it
@@ -662,20 +662,19 @@ func (f *Filesystem) contentMatches(id string, hash string) bool {
 		!st2.ModTime().Equal(st.ModTime()) {
 		return false
 	}
-	f.verified.Store(id, state)
+	f.verifiedPut(id, state)
 	return true
 }
 
 // verifiedNow is a cheap (no hashing) check whether the cached content of id
 // is known to have the given hash.
 func (f *Filesystem) verifiedNow(id string, hash string) bool {
-	v, ok := f.verified.Load(id)
-	if !ok || hash == "" || v.(verifiedContent).hash != strings.ToLower(hash) {
+	v, ok := f.verifiedGet(id)
+	if !ok || hash == "" || v.hash != strings.ToLower(hash) {
 		return false
 	}
 	st, err := f.content.Stat(id)
-	return err == nil && st.Size() == v.(verifiedContent).size &&
-		st.ModTime().Equal(v.(verifiedContent).mtime)
+	return err == nil && v.same(newVerified(hash, st))
 }
 
 // hydrate makes sure a file's content is cached and matches the server's
@@ -889,7 +888,6 @@ func (f *Filesystem) evictFile(inode *Inode) (bool, error) {
 	if !f.content.Evict(id) {
 		return false, errEvictBusy
 	}
-	f.verified.Delete(id)
 	log.Info().Str("id", id).Str("name", inode.DriveItem.Name).Msg("Evicted cached content.")
 	return true, nil
 }

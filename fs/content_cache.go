@@ -15,6 +15,9 @@ type LoopbackCache struct {
 	// openM makes Open and Evict atomic with respect to each other, so content
 	// is never evicted from under a file descriptor that is just being opened.
 	openM sync.Mutex
+	// onRemove, if set, is called after content was deleted, evicted or moved
+	// away from an ID.
+	onRemove func(id string)
 }
 
 func NewLoopbackCache(directory string) *LoopbackCache {
@@ -53,12 +56,16 @@ func (l *LoopbackCache) InsertStream(id string, reader io.Reader) (int64, error)
 // Delete closes the fd AND deletes content from disk.
 func (l *LoopbackCache) Delete(id string) error {
 	l.Close(id)
-	return os.Remove(l.contentPath(id))
+	err := os.Remove(l.contentPath(id))
+	l.removed(id)
+	return err
 }
 
 // Move moves content from one ID to another
 func (l *LoopbackCache) Move(oldID string, newID string) error {
-	return os.Rename(l.contentPath(oldID), l.contentPath(newID))
+	err := os.Rename(l.contentPath(oldID), l.contentPath(newID))
+	l.removed(oldID)
+	return err
 }
 
 // IsOpen returns true if the file is already opened somewhere
@@ -121,7 +128,17 @@ func (l *LoopbackCache) Evict(id string) bool {
 	if _, ok := l.fds.Load(id); ok {
 		return false
 	}
-	return os.Remove(l.contentPath(id)) == nil
+	ok := os.Remove(l.contentPath(id)) == nil
+	if ok {
+		l.removed(id)
+	}
+	return ok
+}
+
+func (l *LoopbackCache) removed(id string) {
+	if l.onRemove != nil {
+		l.onRemove(id)
+	}
 }
 
 // Stat returns the file info of the content file for an ID, without opening

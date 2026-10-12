@@ -618,18 +618,16 @@ func (f *Filesystem) useCachedContent(ctx zerolog.Logger, inode *Inode, fd *os.F
 	}
 
 	// skip re-hashing if the file is unchanged since we last verified it
-	state := verifiedContent{
-		hash: strings.ToLower(remoteHash), size: st.Size(), mtime: st.ModTime(),
-	}
-	if v, ok := f.verified.Load(id); !ok || v.(verifiedContent) != state {
-		if remoteHash == "" || !strings.EqualFold(remoteHash, graph.QuickXORHashStream(fd)) {
+	state := newVerified(remoteHash, st)
+	if v, ok := f.verifiedGet(id); !ok || !v.same(state) {
+		if remoteHash == "" || !strings.EqualFold(remoteHash, f.hashContent(fd)) {
 			return fuse.OK, false
 		}
 		// hashing may have raced with writes, so re-stat before trusting it
 		if st2, err := fd.Stat(); err != nil || st2.Size() != st.Size() || !st2.ModTime().Equal(st.ModTime()) {
 			return fuse.OK, false
 		}
-		f.verified.Store(id, state)
+		f.verifiedPut(id, state)
 	}
 
 	// disk content is only used if the checksums match
@@ -697,7 +695,7 @@ func (f *Filesystem) fetchContent(ctx zerolog.Logger, inode *Inode, fd *os.File,
 	// replace content only on a match
 	size, err := graph.GetItemContentStream(id, f.auth, temp)
 	if err != nil || remoteHash == "" ||
-		!strings.EqualFold(remoteHash, graph.QuickXORHashStream(temp)) {
+		!strings.EqualFold(remoteHash, f.hashContent(temp)) {
 		ctx.Error().Err(err).Msg("Failed to fetch remote content.")
 		return fuse.EREMOTEIO
 	}
@@ -744,9 +742,7 @@ func (f *Filesystem) fetchContent(ctx zerolog.Logger, inode *Inode, fd *os.File,
 	io.Copy(fd, temp)
 	inode.DriveItem.Size = size
 	if st, err := fd.Stat(); err == nil {
-		f.verified.Store(id, verifiedContent{
-			hash: strings.ToLower(remoteHash), size: st.Size(), mtime: st.ModTime(),
-		})
+		f.verifiedPut(id, newVerified(remoteHash, st))
 	}
 	return fuse.OK
 }
@@ -755,9 +751,7 @@ func (f *Filesystem) fetchContent(ctx zerolog.Logger, inode *Inode, fd *os.File,
 // has the given hash.
 func (f *Filesystem) markVerified(id string, hash string) {
 	if st, err := f.content.Stat(id); err == nil {
-		f.verified.Store(id, verifiedContent{
-			hash: strings.ToLower(hash), size: st.Size(), mtime: st.ModTime(),
-		})
+		f.verifiedPut(id, newVerified(hash, st))
 	}
 }
 
@@ -866,6 +860,10 @@ func (f *Filesystem) Write(cancel <-chan struct{}, in *fuse.WriteIn, data []byte
 
 	st, _ := fd.Stat()
 	inode.DriveItem.Size = uint64(st.Size())
+	if !inode.hasChanges {
+		// content is about to diverge from the verified state
+		f.verifiedForget(id)
+	}
 	inode.hasChanges = true
 	return uint32(n), fuse.OK
 }
