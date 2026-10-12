@@ -1,4 +1,4 @@
-.PHONY: all activity test-activity install-activity test test-race test-live test-init srpm rpm dsc changes deb clean install uninstall
+.PHONY: all activity test-activity install-activity dolphin test-dolphin install-dolphin test test-race test-live test-init srpm rpm dsc changes deb clean install uninstall
 
 # autocalculate software/package versions
 VERSION := $(shell grep Version onedriver.spec | sed 's/Version: *//g')
