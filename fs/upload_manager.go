@@ -2,6 +2,7 @@ package fs
 
 import (
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/jstaf/onedriver/fs/graph"
@@ -18,7 +19,8 @@ type UploadManager struct {
 	queue         chan *UploadSession
 	deletionQueue chan string
 	sessions      map[string]*UploadSession
-	inFlight      uint8 // number of sessions in flight
+	sessionsMu    sync.RWMutex // guards writes to sessions (and reads from other goroutines)
+	inFlight      uint8        // number of sessions in flight
 	auth          *graph.Auth
 	fs            *Filesystem
 	db            *bolt.DB
@@ -54,7 +56,9 @@ func NewUploadManager(duration time.Duration, db *bolt.DB, fs *Filesystem, auth 
 				manager.inFlight++
 			}
 			session.cancel(auth) // uploads are currently non-resumable
+			manager.sessionsMu.Lock()
 			manager.sessions[session.ID] = session
+			manager.sessionsMu.Unlock()
 			return nil
 		})
 	})
@@ -79,7 +83,9 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 				b, _ := tx.CreateBucketIfNotExists(bucketUploads)
 				return b.Put([]byte(session.ID), contents)
 			})
+			u.sessionsMu.Lock()
 			u.sessions[session.ID] = session
+			u.sessionsMu.Unlock()
 
 		case cancelID := <-u.deletionQueue: // remove uploads for deleted items
 			u.finishUpload(cancelID)
@@ -184,5 +190,20 @@ func (u *UploadManager) finishUpload(id string) {
 	if u.inFlight > 0 {
 		u.inFlight--
 	}
+	u.sessionsMu.Lock()
 	delete(u.sessions, id)
+	u.sessionsMu.Unlock()
+}
+
+// sessionState returns the state of the upload session for the given ID, and
+// whether such a session exists. It is safe to call from any goroutine and
+// never blocks on the upload loop.
+func (u *UploadManager) sessionState(id string) (state int, exists bool) {
+	u.sessionsMu.RLock()
+	session, exists := u.sessions[id]
+	u.sessionsMu.RUnlock()
+	if !exists {
+		return uploadNotStarted, false
+	}
+	return session.getState(), true
 }
