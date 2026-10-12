@@ -55,3 +55,9 @@ debian/files
 *.build*
 *.upload
 *.tar.xz
+
+# arch package build stuff
+pkg/arch/pkg/
+pkg/arch/src/
+pkg/arch/*.pkg.tar.*
+pkg/arch/onedriver/
