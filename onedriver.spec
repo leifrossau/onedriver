@@ -42,6 +42,9 @@ go build -v -mod=vendor $BUILD_TAGS \
 go build -v -mod=vendor $BUILD_TAGS \
   -ldflags="-X github.com/jstaf/onedriver/cmd/common.commit=$(cat .commit)" \
   ./cmd/onedriver-launcher
+CGO_ENABLED=0 go build -v -mod=vendor \
+  -ldflags="-X github.com/jstaf/onedriver/cmd/common.commit=$(cat .commit)" \
+  ./cmd/onedriver-tray
 gzip pkg/resources/onedriver.1
 
 %install
@@ -49,14 +52,18 @@ rm -rf $RPM_BUILD_ROOT
 mkdir -p %{buildroot}/%{_bindir}
 mkdir -p %{buildroot}/usr/share/icons/%{name}
 mkdir -p %{buildroot}/usr/share/applications
+mkdir -p %{buildroot}/etc/xdg/autostart
 mkdir -p %{buildroot}/usr/lib/systemd/user
 mkdir -p %{buildroot}/usr/share/man/man1
 cp %{name} %{buildroot}/%{_bindir}
 cp %{name}-launcher %{buildroot}/%{_bindir}
+cp %{name}-tray %{buildroot}/%{_bindir}
 cp pkg/resources/%{name}.png %{buildroot}/usr/share/icons/%{name}
 cp pkg/resources/%{name}-128.png %{buildroot}/usr/share/icons/%{name}
 cp pkg/resources/%{name}.svg %{buildroot}/usr/share/icons/%{name}
 cp pkg/resources/%{name}-launcher.desktop %{buildroot}/usr/share/applications
+cp pkg/resources/%{name}-tray.desktop %{buildroot}/usr/share/applications
+cp pkg/resources/%{name}-tray.desktop %{buildroot}/etc/xdg/autostart
 cp pkg/resources/%{name}@.service %{buildroot}/usr/lib/systemd/user
 cp pkg/resources/%{name}.1.gz %{buildroot}/usr/share/man/man1
 
@@ -66,11 +73,14 @@ cp pkg/resources/%{name}.1.gz %{buildroot}/usr/share/man/man1
 %defattr(-,root,root,-)
 %attr(755, root, root) %{_bindir}/%{name}
 %attr(755, root, root) %{_bindir}/%{name}-launcher
+%attr(755, root, root) %{_bindir}/%{name}-tray
 %dir /usr/share/icons/%{name}
 %attr(644, root, root) /usr/share/icons/%{name}/%{name}.png
 %attr(644, root, root) /usr/share/icons/%{name}/%{name}-128.png
 %attr(644, root, root) /usr/share/icons/%{name}/%{name}.svg
 %attr(644, root, root) /usr/share/applications/%{name}-launcher.desktop
+%attr(644, root, root) /usr/share/applications/%{name}-tray.desktop
+%attr(644, root, root) /etc/xdg/autostart/%{name}-tray.desktop
 %attr(644, root, root) /usr/lib/systemd/user/%{name}@.service
 %doc
 %attr(644, root, root) /usr/share/man/man1/%{name}.1.gz

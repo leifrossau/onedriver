@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Onedriver tray
+Comment=Show the state of mounted OneDrive drives in the system tray.
+Type=Application
+Exec=/usr/bin/onedriver-tray
+Icon=/usr/share/icons/onedriver/onedriver.svg
+Categories=Utility;
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel
