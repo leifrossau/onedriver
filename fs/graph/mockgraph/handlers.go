@@ -208,7 +208,7 @@ func (s *Server) graph(w http.ResponseWriter, r *http.Request, p string) {
 		s.listChildren(w, r, t)
 
 	case r.Method == http.MethodGet && t.suffix == "/content":
-		if t.node == nil || t.node.dir {
+		if t.node == nil || t.node.dir || t.node.facet != "" {
 			writeServiceErr(w, errNotFound)
 			return
 		}
@@ -264,7 +264,11 @@ func (s *Server) json(n *node, tombstone bool) map[string]interface{} {
 		ref["path"] = s.parentPath(n)
 	}
 	m["parentReference"] = ref
-	if n.dir {
+	if n.facet == "vault" {
+		m["specialFolder"] = map[string]interface{}{"name": "vault"}
+	} else if strings.HasPrefix(n.facet, "package:") {
+		m["package"] = map[string]interface{}{"type": strings.TrimPrefix(n.facet, "package:")}
+	} else if n.dir {
 		count := 0
 		if !n.deleted {
 			count = len(s.children(n.id))
@@ -291,6 +295,10 @@ func fileMime(name string) string {
 }
 
 func (s *Server) listChildren(w http.ResponseWriter, r *http.Request, t target) {
+	if t.node != nil && t.node.facet != "" {
+		writeErr(w, 400, "invalidRequest", "invalidResourceId: ObjectHandle is Invalid")
+		return
+	}
 	if t.node == nil || !t.node.dir {
 		writeServiceErr(w, errNotFound)
 		return

@@ -160,6 +160,9 @@ func (f *Filesystem) Mkdir(cancel <-chan struct{}, in *fuse.MkdirIn, name string
 	if inode == nil {
 		return fuse.ENOENT
 	}
+	if inode.IsOpaque() {
+		return fuse.EROFS
+	}
 	id := inode.ID()
 	path := filepath.Join(inode.Path(), name)
 	ctx := log.With().
@@ -391,6 +394,9 @@ func (f *Filesystem) Mknod(cancel <-chan struct{}, in *fuse.MknodIn, name string
 	parent := f.GetID(parentID)
 	if parent == nil {
 		return fuse.ENOENT
+	}
+	if parent.IsOpaque() {
+		return fuse.EROFS
 	}
 
 	path := filepath.Join(parent.Path(), name)
@@ -763,7 +769,7 @@ func (f *Filesystem) Unlink(cancel <-chan struct{}, in *fuse.InHeader, name stri
 		// the file we are unlinking never existed
 		return fuse.ENOENT
 	}
-	if f.IsOffline() {
+	if f.IsOffline() || child.IsOpaque() {
 		return fuse.EROFS
 	}
 
@@ -959,6 +965,9 @@ func (f *Filesystem) SetAttr(cancel <-chan struct{}, in *fuse.SetAttrIn, out *fu
 	if i == nil {
 		return fuse.ENOENT
 	}
+	if i.IsOpaque() {
+		return fuse.EROFS
+	}
 	path := i.Path()
 	isDir := i.IsDir() // holds an rlock
 	i.Lock()
@@ -1035,8 +1044,14 @@ func (f *Filesystem) Rename(cancel <-chan struct{}, in *fuse.RenameIn, name stri
 		return fuse.ENOENT
 	}
 	dest := filepath.Join(newParentItem.Path(), newName)
+	if newParentItem.IsOpaque() {
+		return fuse.EROFS
+	}
 
 	inode, _ := f.GetChild(oldParentID, name, f.auth)
+	if inode != nil && inode.IsOpaque() {
+		return fuse.EROFS
+	}
 	id, err := f.remoteID(inode)
 	newParentID := newParentItem.ID()
 

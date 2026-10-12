@@ -472,6 +472,16 @@ func (f *Filesystem) GetChildrenID(id string, auth *graph.Auth) (map[string]*Ino
 		return children, nil
 	}
 
+	if inode.IsOpaque() {
+		// nothing to list (and the server refuses to list the Personal Vault)
+		inode.Lock()
+		if inode.children == nil {
+			inode.children = []string{}
+		}
+		inode.Unlock()
+		return children, nil
+	}
+
 	// If item.children is not nil, it means we have the item's children
 	// already and can fetch them directly from the cache
 	inode.RLock()
@@ -518,6 +528,15 @@ func (f *Filesystem) GetChildrenID(id string, auth *graph.Auth) (map[string]*Ino
 	for _, item := range fetched {
 		// we will always have an id after fetching from the server
 		child := NewInodeDriveItem(item)
+		if item.IsVault() {
+			log.Info().Str("id", item.ID).Str("name", item.Name).
+				Msg("Item is the locked OneDrive Personal Vault, showing it as an " +
+					"empty read-only directory (it cannot be accessed through the API).")
+		} else if item.IsOpaque() {
+			log.Info().Str("id", item.ID).Str("name", item.Name).
+				Msg("Item is neither a file nor a folder (package?), showing it as an " +
+					"empty read-only directory.")
+		}
 		child.pin = pins[item.ID]
 		f.InsertNodeID(child)
 		f.metadata.Store(child.DriveItem.ID, child)

@@ -52,6 +52,7 @@ type node struct {
 	ver, cver        int   // eTag / cTag counters
 	seq              int64 // sequence number of the last change, for delta
 	deleted          bool
+	facet            string // "vault" or "package:<type>": neither file nor folder
 }
 
 // Server is a fake Microsoft Graph server.
@@ -220,6 +221,29 @@ func (s *Server) Mkdir(p string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.mkdirAll(p).id
+}
+
+// PutVault creates an item shaped like the locked Personal Vault in the drive
+// root: it has a specialFolder facet but neither a file nor a folder facet,
+// its content endpoint returns 404 and listing its children fails. It returns
+// the item's ID.
+func (s *Server) PutVault(name string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := s.create(RootID, name, false)
+	n.facet = "vault"
+	return n.id
+}
+
+// PutPackage creates an item with a package facet of the given type (for
+// example "oneNote") and neither a file nor a folder facet, in directory dir
+// (created if missing). It returns the item's ID.
+func (s *Server) PutPackage(dir, name, typ string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := s.create(s.mkdirAll(dir).id, name, false)
+	n.facet = "package:" + typ
+	return n.id
 }
 
 // PutFile creates or replaces the file at p (creating missing parent

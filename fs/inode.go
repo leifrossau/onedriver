@@ -259,9 +259,22 @@ func (i *Inode) Mode() uint32 {
 		if i.DriveItem.IsDir() {
 			return fuse.S_IFDIR | 0755
 		}
+		if i.DriveItem.IsOpaque() {
+			// Personal Vault, OneNote notebooks...: not a file, see IsOpaque
+			return fuse.S_IFDIR | 0555
+		}
 		return fuse.S_IFREG | 0644
 	}
 	return i.mode
+}
+
+// IsOpaque returns true for server items that are neither files nor folders
+// (the locked Personal Vault, OneNote packages). They are shown as empty,
+// read-only directories and never downloaded or listed.
+func (i *Inode) IsOpaque() bool {
+	i.RLock()
+	defer i.RUnlock()
+	return i.mode == 0 && i.DriveItem.IsOpaque()
 }
 
 // ModTime returns the Unix timestamp of last modification (to get a time.Time
