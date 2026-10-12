@@ -49,6 +49,10 @@ without the interface.
 - `error`: an upload was dropped after too many retries, or authentication
   failed; `LastError` says why
 
+Additional property (v1.2): `AuthExpired` (`b`), true while the daemon has no
+valid login. The daemon keeps running (cached files stay readable, changes are
+kept locally) and resumes syncing after `Login` succeeds.
+
 `PropertiesChanged` is emitted when any of these change, rate-limited to at
 most once per second (coalesced).
 
@@ -65,6 +69,7 @@ most once per second (coalesced).
 | `SetPinned` | `(s path, b pinned) → ()` | same as setting `user.onedriver.pinned` |
 | `Evict` | `(s path) → ()` | same as setting `user.onedriver.evict` |
 | `GetWebURL` | `(s path) → s` | the item's OneDrive web URL (`webUrl`), for "View online" |
+| `Login` | `() → ()` | (v1.2) open the login window now, from the daemon process. Used after an `auth-expired` notification. Returns immediately; the result shows up as `State` leaving `error` and `LastError` being cleared, or as another `auth-expired` notification. Calling it while a login window is already open does nothing. |
 
 Errors use `org.freedesktop.DBus.Error.FileNotFound` for unknown paths and
 `org.freedesktop.DBus.Error.Failed` otherwise.
