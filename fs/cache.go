@@ -37,6 +37,21 @@ type Filesystem struct {
 	// tracks currently open directories
 	opendirsM sync.RWMutex
 	opendirs  map[uint64][]*Inode
+
+	// tracks in-progress content downloads, so a file is only fetched once
+	downloadsM sync.Mutex
+	downloads  map[string]chan struct{}
+
+	// remembers which cached content files were hash-verified (id -> verifiedContent)
+	verified sync.Map
+}
+
+// verifiedContent records the state of a cache file when its hash was last
+// verified, so unchanged files need not be re-hashed on every open.
+type verifiedContent struct {
+	hash  string
+	size  int64
+	mtime time.Time
 }
 
 // boltdb buckets
@@ -107,6 +122,7 @@ func NewFilesystem(auth *graph.Auth, cacheDir string) *Filesystem {
 		db:            db,
 		auth:          auth,
 		opendirs:      make(map[uint64][]*Inode),
+		downloads:     make(map[string]chan struct{}),
 	}
 
 	rootItem, err := graph.GetItem("root", auth)
