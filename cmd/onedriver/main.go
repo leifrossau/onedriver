@@ -131,7 +131,6 @@ func main() {
 	server, err := fuse.NewServer(filesystem, mountpoint, &fuse.MountOptions{
 		Name:          "onedriver",
 		FsName:        "onedriver",
-		DisableXAttrs: true,
 		MaxBackground: 1024,
 		Debug:         *debugOn,
 	})
