@@ -26,7 +26,7 @@ func TestConfigMerge(t *testing.T) {
 
 	conf := LoadConfig(filepath.Join(configTestDir, "config-test-merge.yml"))
 
-	assert.Equal(t, "debug", conf.LogLevel)
+	assert.Equal(t, "info", conf.LogLevel)
 	assert.Equal(t, "/some/directory", conf.CacheDir)
 }
 
@@ -38,7 +38,7 @@ func TestLoadNonexistentConfig(t *testing.T) {
 
 	home, _ := os.UserHomeDir()
 	assert.Equal(t, filepath.Join(home, ".cache/onedriver"), conf.CacheDir)
-	assert.Equal(t, "debug", conf.LogLevel)
+	assert.Equal(t, "info", conf.LogLevel)
 }
 
 func TestWriteConfig(t *testing.T) {

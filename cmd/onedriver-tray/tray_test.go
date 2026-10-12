@@ -118,6 +118,7 @@ func (d *fakeDaemon) rec(m string) *dbus.Error {
 func (d *fakeDaemon) Pause() *dbus.Error   { return d.rec("Pause") }
 func (d *fakeDaemon) Resume() *dbus.Error  { return d.rec("Resume") }
 func (d *fakeDaemon) SyncNow() *dbus.Error { return d.rec("SyncNow") }
+func (d *fakeDaemon) Login() *dbus.Error   { return d.rec("Login") }
 
 // fakeNotifications is a stand-in for org.freedesktop.Notifications.
 type fakeNotifications struct {
@@ -387,19 +388,85 @@ func TestNotifyBecomesNotification(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("no auth notification")
 	}
-	// clicking "Log in" runs the launcher. The fake service reports the
-	// notification before the tray has stored its reply id, so keep clicking
-	// until the tray knows about it (a real user clicks much later).
+	// clicking "Log in" calls Login() on that instance, not the launcher. The
+	// fake service reports the notification before the tray has stored its
+	// reply id, so keep clicking until the tray knows about it (a real user
+	// clicks much later).
 	deadline := time.After(3 * time.Second)
 	for {
 		require.NoError(t, e.client.Emit("/org/freedesktop/Notifications", notifDst+".ActionInvoked", uint32(7), "login"))
+		time.Sleep(100 * time.Millisecond)
+		if len(d.called()) > 0 {
+			break
+		}
 		select {
-		case r := <-e.ran:
-			assert.Equal(t, []string{"onedriver-launcher"}, r)
-			return
-		case <-time.After(100 * time.Millisecond):
 		case <-deadline:
-			t.Fatal("launcher not started")
+			t.Fatal("Login was not called")
+		default:
 		}
 	}
+	assert.Equal(t, "Login", d.called()[0])
+	select {
+	case r := <-e.ran:
+		t.Fatalf("unexpected run %v", r)
+	default:
+	}
+}
+
+// oldDaemon is a daemon from before Login() existed.
+type oldDaemon struct{ d *fakeDaemon }
+
+func (o oldDaemon) GetStatus() (map[string]dbus.Variant, *dbus.Error) { return o.d.GetStatus() }
+func (o oldDaemon) GetRecent(limit uint32) ([]fakeRecent, *dbus.Error) {
+	return o.d.GetRecent(limit)
+}
+
+func TestLoginFallsBackToLauncher(t *testing.T) {
+	e := newEnv(t)
+	d := newFakeDaemon(t, e.addr, "home_u_A", "/home/u/A")
+	require.NoError(t, d.conn.Export(oldDaemon{d}, mountObj, mountIface))
+	d.set("AuthExpired", true)
+	d.set("State", "error")
+	d.start(t)
+	require.Eventually(t, func() bool { return len(e.tray.Instances()) == 1 }, 3*time.Second, 20*time.Millisecond)
+
+	l := e.layout(t)
+	_, ok := l.find(t, "Login expired")
+	assert.True(t, ok, "status line")
+	id, ok := l.find(t, "Log in…")
+	require.True(t, ok, "menu item")
+	menu := e.client.Object(e.tray.sni.busName, menuPath)
+	require.NoError(t, menu.Call(menuIface+".Event", 0, id, "clicked", dbus.MakeVariant(""), uint32(0)).Err)
+	select {
+	case r := <-e.ran:
+		assert.Equal(t, []string{"onedriver-launcher"}, r)
+	case <-time.After(3 * time.Second):
+		t.Fatal("launcher not started")
+	}
+}
+
+func TestLoginMenuItemCallsLogin(t *testing.T) {
+	e := newEnv(t)
+	d := newFakeDaemon(t, e.addr, "home_u_A", "/home/u/A")
+	d.start(t)
+	require.Eventually(t, func() bool { return len(e.tray.Instances()) == 1 }, 3*time.Second, 20*time.Millisecond)
+	_, ok := e.layout(t).find(t, "Log in…")
+	assert.False(t, ok, "only shown while the login is expired")
+
+	d.set("AuthExpired", true)
+	var id int32
+	require.Eventually(t, func() bool {
+		var ok bool
+		id, ok = e.layout(t).find(t, "Log in…")
+		return ok
+	}, 3*time.Second, 50*time.Millisecond)
+	menu := e.client.Object(e.tray.sni.busName, menuPath)
+	require.NoError(t, menu.Call(menuIface+".Event", 0, id, "clicked", dbus.MakeVariant(""), uint32(0)).Err)
+	require.Eventually(t, func() bool { return len(d.called()) == 1 && d.called()[0] == "Login" },
+		3*time.Second, 20*time.Millisecond)
+	d.set("AuthExpired", false)
+	require.Eventually(t, func() bool {
+		_, ok := e.layout(t).find(t, "Log in…")
+		return !ok
+	}, 3*time.Second, 50*time.Millisecond)
 }

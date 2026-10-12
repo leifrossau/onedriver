@@ -133,19 +133,20 @@ func TestMenuMultipleInstances(t *testing.T) {
 }
 
 func TestComposeCoalesces(t *testing.T) {
-	one := compose([]notifEvent{{"conflict", "dir/a (conflicted).txt", "", "/m"}})
+	one := compose([]notifEvent{{"conflict", "dir/a (conflicted).txt", "", "/m", "inst"}})
 	assert.Len(t, one, 1)
 	assert.Equal(t, "Conflict in a (conflicted).txt: kept both versions", one[0].Body)
 
 	many := compose([]notifEvent{
-		{"conflict", "a", "", "/m"}, {"conflict", "b", "", "/m"}, {"conflict", "c", "", "/m"},
-		{"auth-expired", "", "", "/m"}, {"auth-expired", "", "", "/m"},
+		{"conflict", "a", "", "/m", "inst"}, {"conflict", "b", "", "/m", "inst"}, {"conflict", "c", "", "/m", "inst"},
+		{"auth-expired", "", "", "/m", "inst"}, {"auth-expired", "", "", "/m", "inst"},
 	})
 	assert.Len(t, many, 2)
 	assert.Contains(t, many[0].Body, "3 conflicts")
 	assert.True(t, many[1].Login)
+	assert.Equal(t, "inst", many[1].Instance)
 
-	failed := compose([]notifEvent{{"upload-failed", "x.bin", "too big", "/m"}})
+	failed := compose([]notifEvent{{"upload-failed", "x.bin", "too big", "/m", "inst"}})
 	assert.Contains(t, failed[0].Body, "x.bin")
 	assert.Contains(t, failed[0].Body, "too big")
 }

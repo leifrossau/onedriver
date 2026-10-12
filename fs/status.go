@@ -32,6 +32,8 @@ const (
 // syncControl is the state behind pausing, activity and error reporting.
 type syncControl struct {
 	paused atomic.Bool
+	// loginRunning is set while the login window is open
+	loginRunning atomic.Bool
 	// wake interrupts the delta loop's sleep (Resume, SyncNow)
 	wake chan struct{}
 	// removes the auth failure subscription, set once by NewFilesystem
@@ -159,6 +161,53 @@ func (f *Filesystem) noteAuthFailure(msg string) {
 	f.notify(status.Notification{Kind: status.KindAuthExpired, Message: msg})
 }
 
+// clearAuthFailure undoes noteAuthFailure after a successful login.
+func (f *Filesystem) clearAuthFailure() {
+	f.ctl.mu.Lock()
+	f.ctl.authFailed = false
+	f.ctl.lastError = ""
+	f.ctl.mu.Unlock()
+}
+
+// AuthExpired returns whether there is no valid login. The filesystem then
+// keeps serving cached files and keeps changes locally, but does not talk to
+// the server until Login succeeds. Unlike offline mode, new files may still be
+// written: they are uploaded after the login.
+func (f *Filesystem) AuthExpired() bool {
+	return f.auth != nil && f.auth.Expired()
+}
+
+// Login opens the interactive login window in a goroutine (at most one at a
+// time) and returns right away; it returns an error if no window can be
+// opened. On success the new tokens are used from then on, the error state is
+// cleared and a sync is triggered; on failure the filesystem stays in the
+// auth-expired state and the user is notified again.
+func (f *Filesystem) Login() error {
+	if err := graph.LoginUnavailable(); err != nil {
+		return err
+	}
+	if !f.ctl.loginRunning.CompareAndSwap(false, true) {
+		return nil // a login window is open already
+	}
+	go func() {
+		defer f.ctl.loginRunning.Store(false)
+		err := f.auth.Login()
+		if err != nil {
+			log.Warn().Err(err).Msg("Login did not succeed, staying logged out.")
+			if f.auth.Expired() {
+				f.noteAuthFailure("Login failed (" + err.Error() + "), click Log in to try again")
+			}
+			return
+		}
+		f.clearAuthFailure()
+		f.SyncNow()
+		if f.pins != nil {
+			f.pins.signal()
+		}
+	}()
+	return nil
+}
+
 // noteSyncSuccess is called after every successful delta poll.
 func (f *Filesystem) noteSyncSuccess() {
 	f.ctl.mu.Lock()
@@ -249,7 +298,11 @@ func (f *Filesystem) Status() status.Status {
 		s.LastSync = c.lastSync.Unix()
 	}
 	s.LastError = c.lastError
-	s.HasError = c.authFailed || len(c.failedUploads) > 0
+	s.AuthExpired = f.auth != nil && f.auth.Expired()
+	if s.AuthExpired && s.LastError == "" {
+		s.LastError = graph.AuthExpiredMessage
+	}
+	s.HasError = c.authFailed || s.AuthExpired || len(c.failedUploads) > 0
 	s.CacheBytes = c.cacheBytes
 	s.QuotaUsed, s.QuotaTotal = c.quotaUsed, c.quotaTotal
 	refreshCache := !c.cacheRunning && time.Since(c.cacheAt) > cacheSizeMaxAge

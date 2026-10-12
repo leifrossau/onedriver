@@ -11,9 +11,11 @@ package graph
 import "C"
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"unsafe"
 
 	"github.com/rs/zerolog/log"
@@ -21,7 +23,9 @@ import (
 
 // Fetch the auth code required as the first part of oauth2 authentication. Uses
 // webkit2gtk to create a popup browser.
-func getAuthCode(a AuthConfig, accountName string) string {
+func getAuthCode(a AuthConfig, accountName string) (string, error) {
+	runtime.LockOSThread() // GTK must be driven from one thread
+	defer runtime.UnlockOSThread()
 	warnMissingGstreamerPlugins()
 	cAuthURL := C.CString(getAuthURL(a))
 	cAccountName := C.CString(accountName)
@@ -33,16 +37,14 @@ func getAuthCode(a AuthConfig, accountName string) string {
 
 	code, err := parseAuthCode(response)
 	if err != nil || code == "" {
-		//TODO create a popup with the auth failure message here instead of a log message
 		fmt.Fprint(os.Stderr, "\nLogin did not complete (the window was closed, or the "+
 			"login page did not work correctly, e.g. the Authenticator number was not "+
 			"shown).\nTry again with:  onedriver -n\n"+
 			"which lets you log in using your normal web browser. To debug the "+
 			"embedded login window, run with ONEDRIVER_DEBUG_AUTH=1.\n")
-		log.Fatal().Msg("No validation code returned, or code was invalid. " +
-			"Please restart the application and try again.")
+		return "", errors.New("login did not complete: no validation code returned")
 	}
-	return code
+	return code, nil
 }
 
 // uriGetHost is exclusively here for testing because we cannot use CGo in tests,

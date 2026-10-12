@@ -14,7 +14,6 @@ import (
 	"regexp"
 	"time"
 
-	"dario.cat/mergo"
 	"github.com/rs/zerolog/log"
 )
 
@@ -41,32 +40,50 @@ type Header struct {
 	key, value string
 }
 
-// Request performs an authenticated request to Microsoft Graph
+// Request performs an authenticated request to Microsoft Graph. While the login
+// is expired it returns ErrAuthExpired without contacting the server.
 func Request(resource string, auth *Auth, method string, content io.Reader, headers ...Header) ([]byte, error) {
-	if auth == nil || auth.AccessToken == "" {
+	if auth == nil || auth.Token() == "" {
+		if auth != nil && auth.Expired() {
+			return nil, ErrAuthExpired
+		}
 		// a catch all condition to avoid wiping our auth by accident
 		log.Error().Msg("Auth was empty and we attempted to make a request with it!")
-		return nil, errors.New("cannot make a request with empty auth")
+		return nil, errors.New("cannot make request with empty auth")
 	}
 
-	auth.Refresh()
+	// transient renewal failures are not fatal: the old token may still work
+	if err := auth.refresh(""); errors.Is(err, ErrAuthExpired) {
+		return nil, err
+	}
 
 	client := &http.Client{Timeout: 60 * time.Second}
-	request, _ := http.NewRequest(method, GraphURL+resource, content)
-	request.Header.Add("Authorization", "bearer "+auth.AccessToken)
-	switch method { // request type-specific code here
-	case "PATCH":
-		request.Header.Add("If-Match", "*")
-		request.Header.Add("Content-Type", "application/json")
-	case "POST":
-		request.Header.Add("Content-Type", "application/json")
-	case "PUT":
-		request.Header.Add("Content-Type", "text/plain")
+	token := auth.Token()
+	newRequest := func() *http.Request {
+		request, _ := http.NewRequest(method, GraphURL+resource, content)
+		request.Header.Add("Authorization", "bearer "+token)
+		switch method { // request type-specific code here
+		case "PATCH":
+			request.Header.Add("If-Match", "*")
+			request.Header.Add("Content-Type", "application/json")
+		case "POST":
+			request.Header.Add("Content-Type", "application/json")
+		case "PUT":
+			request.Header.Add("Content-Type", "text/plain")
+		}
+		for _, header := range headers {
+			request.Header.Add(header.key, header.value)
+		}
+		return request
 	}
-	for _, header := range headers {
-		request.Header.Add(header.key, header.value)
+	// rewind the body for a second attempt, if that is possible
+	rewind := func() {
+		if seeker, ok := content.(io.Seeker); ok {
+			seeker.Seek(0, io.SeekStart)
+		}
 	}
 
+	request := newRequest()
 	response, err := client.Do(request)
 	if err != nil {
 		// the actual request failed
@@ -76,20 +93,34 @@ func Request(resource string, auth *Auth, method string, content io.Reader, head
 	response.Body.Close()
 
 	if response.StatusCode == 401 {
-		var err graphError
-		json.Unmarshal(body, &err)
+		var gerr graphError
+		json.Unmarshal(body, &gerr)
 		log.Warn().
-			Str("code", err.Error.Code).
-			Str("message", err.Error.Message).
-			Msg("Authentication token invalid or new app permissions required, " +
-				"forcing reauth before retrying.")
+			Str("code", gerr.Error.Code).
+			Str("message", gerr.Error.Message).
+			Msg("Graph rejected the access token, trying to renew it.")
 
-		reauth := newAuth(auth.AuthConfig, auth.path, false)
-		mergo.Merge(auth, reauth, mergo.WithOverride)
-		request.Header.Set("Authorization", "bearer "+auth.AccessToken)
-	}
-	if response.StatusCode >= 500 || response.StatusCode == 401 {
+		// Never log in interactively from here. Renew the tokens and try
+		// again once; if the refresh token is rejected, the login is expired.
+		switch rerr := auth.refresh(token); {
+		case errors.Is(rerr, ErrAuthExpired):
+			return nil, rerr
+		case rerr == nil:
+			token = auth.Token()
+			rewind()
+			request = newRequest()
+			response, err = client.Do(request)
+			if err != nil {
+				return nil, err
+			}
+			body, _ = io.ReadAll(response.Body)
+			response.Body.Close()
+		}
+		// otherwise the renewal failed transiently, report the 401 below
+	} else if response.StatusCode >= 500 {
 		// the onedrive API is having issues, retry once
+		rewind()
+		request = newRequest()
 		response, err = client.Do(request)
 		if err != nil {
 			return nil, err
@@ -100,10 +131,10 @@ func Request(resource string, auth *Auth, method string, content io.Reader, head
 
 	if response.StatusCode >= 400 {
 		// something was wrong with the request
-		var err graphError
-		json.Unmarshal(body, &err)
+		var gerr graphError
+		json.Unmarshal(body, &gerr)
 		return nil, fmt.Errorf("HTTP %d - %s: %s",
-			response.StatusCode, err.Error.Code, err.Error.Message)
+			response.StatusCode, gerr.Error.Code, gerr.Error.Message)
 	}
 	return body, nil
 }

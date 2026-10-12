@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/jstaf/onedriver/fs/graph"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -54,6 +55,12 @@ func mountMockAt(t *testing.T, cacheDir string) (string, *Filesystem, func()) {
 // mountMockAtOpts is mountMockAt, optionally without the delta loop (so the
 // test controls the filesystem's offline flag).
 func mountMockAtOpts(t *testing.T, cacheDir string, deltaLoop bool) (string, *Filesystem, func()) {
+	t.Helper()
+	return mountMockAuth(t, cacheDir, auth, deltaLoop)
+}
+
+// mountMockAuth is mountMockAtOpts with the credentials to use.
+func mountMockAuth(t *testing.T, cacheDir string, auth *graph.Auth, deltaLoop bool) (string, *Filesystem, func()) {
 	t.Helper()
 	mnt, err := os.MkdirTemp("", "onedriver-e2e-mount-")
 	require.NoError(t, err)

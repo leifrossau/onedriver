@@ -215,7 +215,7 @@ func (t *thumbnailer) throttle() bool {
 }
 
 func (t *thumbnailer) process(job thumbJob) {
-	if t.f.IsOffline() || t.f.Paused() {
+	if t.f.IsOffline() || t.f.AuthExpired() || t.f.Paused() {
 		return // listing the folder again retries
 	}
 	uri := thumbnailURI(t.opts.Mountpoint, job.path)

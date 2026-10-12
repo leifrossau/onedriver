@@ -167,6 +167,24 @@ systemctl --user enable --now $SERVICE_NAME
 journalctl --user -u $SERVICE_NAME --since today
 ```
 
+## Login expired
+
+If renewing the login fails because of the network or a server problem,
+onedriver keeps the old token and retries in the background with a growing
+delay (one warning in the log). If Microsoft definitively rejects the stored
+login (e.g. `invalid_grant`, you changed your password or revoked the app),
+onedriver never opens a login window by itself and never exits: the mount
+keeps working from the cache, changes are kept locally and uploaded after you
+log in, the tray shows "Login expired" and a notification offers "Log in" (the
+`Login()` D-Bus method). Started from a terminal, onedriver still asks for
+the login at startup as before; started as a service without a terminal it
+starts in this logged-out mode. Without a display (or with `-n`) run
+`onedriver -n <mountpoint>` in a terminal to log in again.
+
+The default log level is now `info` (it used to be `debug`); change it with
+`-l/--log` or `log:` in the config file. Existing config files that say
+`log: debug` keep that setting.
+
 ## Tray icon
 
 `onedriver-tray` shows the state of all running onedriver mounts as a system

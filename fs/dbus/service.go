@@ -24,6 +24,8 @@ type Backend interface {
 	Pause()
 	Resume()
 	SyncNow()
+	// Login opens the login window (asynchronously), see docs/dbus-interface.md
+	Login() error
 	Recent(limit int) []status.Activity
 	FileState(path string) (state string, pinned bool, err error)
 	SetPinnedPath(path string, pinned bool) error
@@ -191,6 +193,7 @@ func (s *Service) properties() map[string]dbus.Variant {
 		"QuotaTotal":       v(st.QuotaTotal),
 		"LastSync":         v(st.LastSync),
 		"LastError":        v(st.LastError),
+		"AuthExpired":      v(st.AuthExpired),
 	}
 }
 
@@ -244,6 +247,10 @@ func (m *methods) Resume() *dbus.Error {
 func (m *methods) SyncNow() *dbus.Error {
 	m.s.backend.SyncNow()
 	return nil
+}
+
+func (m *methods) Login() *dbus.Error {
+	return m.s.fail(m.s.backend.Login())
 }
 
 // activity is one a(sxs) element of GetRecent.
@@ -370,6 +377,7 @@ func introspectionNode() *introspect.Node {
 					method("Pause"),
 					method("Resume"),
 					method("SyncNow"),
+					method("Login"),
 					method("GetRecent", arg("limit", "u", "in"), arg("items", "a(sxs)", "out")),
 					method("GetFileState", arg("path", "s", "in"), arg("state", "s", "out"), arg("pinned", "b", "out")),
 					method("SetPinned", arg("path", "s", "in"), arg("pinned", "b", "in")),
@@ -388,7 +396,7 @@ func introspectionNode() *introspect.Node {
 					prop("Paused", "b"), prop("PendingUploads", "u"), prop("PendingDownloads", "u"),
 					prop("PinnedFiles", "u"), prop("PinnedBytes", "t"), prop("CacheBytes", "t"),
 					prop("QuotaUsed", "t"), prop("QuotaTotal", "t"), prop("LastSync", "x"),
-					prop("LastError", "s"),
+					prop("LastError", "s"), prop("AuthExpired", "b"),
 				},
 			},
 		},

@@ -28,8 +28,8 @@ func Version() string {
 func StringToLevel(input string) zerolog.Level {
 	level, err := zerolog.ParseLevel(input)
 	if err != nil {
-		log.Error().Err(err).Msg("Could not parse log level, defaulting to \"debug\"")
-		return zerolog.DebugLevel
+		log.Error().Err(err).Msg("Could not parse log level, defaulting to \"info\"")
+		return zerolog.InfoLevel
 	}
 	return level
 }

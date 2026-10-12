@@ -214,6 +214,9 @@ func (w *pinWorker) step(jobs *sync.WaitGroup) {
 	if w.f.Paused() {
 		return
 	}
+	if w.f.AuthExpired() {
+		return
+	}
 	if w.f.IsOffline() {
 		w.mu.Lock()
 		w.wasOffline = true
@@ -709,7 +712,7 @@ func (f *Filesystem) hydrate(inode *Inode) error {
 		if f.contentMatches(id, remoteHash) {
 			return nil
 		}
-		if f.IsOffline() {
+		if f.IsOffline() || f.AuthExpired() {
 			return errPinOffline
 		}
 

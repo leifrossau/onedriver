@@ -19,6 +19,7 @@ const (
 // notifEvent is one Notify signal received from an instance.
 type notifEvent struct {
 	Kind, Path, Message, Mount string
+	Instance                   string // bus name of the sender
 }
 
 // notification is one desktop notification to show.
@@ -27,6 +28,8 @@ type notification struct {
 	Body    string
 	Icon    string
 	Login   bool // offer a "Log in" action
+	// Instance is the bus name of the instance to log in
+	Instance string
 }
 
 // compose turns a burst of events into as few notifications as possible: one
@@ -50,9 +53,9 @@ func compose(events []notifEvent) []notification {
 		switch k.kind {
 		case "conflict":
 			if n == 1 {
-				out = append(out, notification{"OneDrive", fmt.Sprintf("Conflict in %s: kept both versions", path.Base(e.Path)), "dialog-warning", false})
+				out = append(out, notification{"OneDrive", fmt.Sprintf("Conflict in %s: kept both versions", path.Base(e.Path)), "dialog-warning", false, ""})
 			} else {
-				out = append(out, notification{"OneDrive", fmt.Sprintf("%d conflicts in %s: kept both versions of each file", n, k.mount), "dialog-warning", false})
+				out = append(out, notification{"OneDrive", fmt.Sprintf("%d conflicts in %s: kept both versions of each file", n, k.mount), "dialog-warning", false, ""})
 			}
 		case "upload-failed":
 			if n == 1 {
@@ -60,12 +63,12 @@ func compose(events []notifEvent) []notification {
 				if e.Message != "" {
 					body += ": " + e.Message
 				}
-				out = append(out, notification{"OneDrive", body, "dialog-error", false})
+				out = append(out, notification{"OneDrive", body, "dialog-error", false, ""})
 			} else {
-				out = append(out, notification{"OneDrive", fmt.Sprintf("%d uploads failed in %s", n, k.mount), "dialog-error", false})
+				out = append(out, notification{"OneDrive", fmt.Sprintf("%d uploads failed in %s", n, k.mount), "dialog-error", false, ""})
 			}
 		case "auth-expired":
-			out = append(out, notification{"OneDrive", "Your OneDrive login has expired. Please log in again.", "dialog-password", true})
+			out = append(out, notification{"OneDrive", "Your OneDrive login has expired. Please log in again.", "dialog-password", true, e.Instance})
 		default:
 			body := e.Message
 			if n > 1 {
@@ -74,7 +77,7 @@ func compose(events []notifEvent) []notification {
 			if body == "" {
 				body = "An error occurred"
 			}
-			out = append(out, notification{"OneDrive", body, "dialog-error", false})
+			out = append(out, notification{"OneDrive", body, "dialog-error", false, ""})
 		}
 	}
 	return out
@@ -85,16 +88,16 @@ func compose(events []notifEvent) []notification {
 type Notifier struct {
 	conn    *dbus.Conn
 	window  time.Duration
-	onLogin func()
+	onLogin func(instance string)
 
 	mu      sync.Mutex
 	pending []notifEvent
 	timer   *time.Timer
-	login   map[uint32]bool
+	login   map[uint32]string
 }
 
-func newNotifier(conn *dbus.Conn, window time.Duration, onLogin func()) *Notifier {
-	return &Notifier{conn: conn, window: window, onLogin: onLogin, login: map[uint32]bool{}}
+func newNotifier(conn *dbus.Conn, window time.Duration, onLogin func(instance string)) *Notifier {
+	return &Notifier{conn: conn, window: window, onLogin: onLogin, login: map[uint32]string{}}
 }
 
 // Add queues an event; the batch is sent once the window has elapsed.
@@ -131,7 +134,7 @@ func (n *Notifier) send(nt notification) {
 	var id uint32
 	if call.Store(&id) == nil && nt.Login {
 		n.mu.Lock()
-		n.login[id] = true
+		n.login[id] = nt.Instance
 		n.mu.Unlock()
 	}
 }
@@ -139,9 +142,9 @@ func (n *Notifier) send(nt notification) {
 // ActionInvoked handles the org.freedesktop.Notifications.ActionInvoked signal.
 func (n *Notifier) ActionInvoked(id uint32, key string) {
 	n.mu.Lock()
-	ok := n.login[id]
+	inst, ok := n.login[id]
 	n.mu.Unlock()
 	if ok && key == loginKey {
-		n.onLogin()
+		n.onLogin(inst)
 	}
 }

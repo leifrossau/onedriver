@@ -85,7 +85,7 @@ func NewTray(conn *dbus.Conn, opts Options) (*Tray, error) {
 	if t.sni, err = newSNI(conn, t.activate); err != nil {
 		return nil, err
 	}
-	t.notif = newNotifier(conn, opts.NotifyWindow, func() { t.Do(Action{Kind: ActSettings}) })
+	t.notif = newNotifier(conn, opts.NotifyWindow, func(inst string) { t.Do(Action{Kind: ActLogin, Instance: inst}) })
 	t.rebuild()
 	return t, nil
 }
@@ -200,7 +200,7 @@ func (t *Tray) handle(sig *dbus.Signal) {
 			mount = i.MountPoint
 		}
 		t.mu.Unlock()
-		t.notif.Add(notifEvent{Kind: kind, Path: p, Message: msg, Mount: mount})
+		t.notif.Add(notifEvent{Kind: kind, Path: p, Message: msg, Mount: mount, Instance: name})
 	case notifDst + ".ActionInvoked":
 		if len(sig.Body) >= 2 {
 			id, _ := sig.Body[0].(uint32)
@@ -277,7 +277,7 @@ func parseStatus(name string, st map[string]dbus.Variant) Instance {
 		State: str("State"), Paused: b("Paused"),
 		PendingUploads: u32("PendingUploads"), PendingDownloads: u32("PendingDownloads"),
 		QuotaUsed: u64("QuotaUsed"), QuotaTotal: u64("QuotaTotal"),
-		LastSync: ls, LastError: str("LastError"),
+		LastSync: ls, LastError: str("LastError"), AuthExpired: b("AuthExpired"),
 	}
 }
 
@@ -358,6 +358,31 @@ func (t *Tray) showActivity() bool {
 	return true
 }
 
+// login asks the daemon to open its login window. Daemons that do not have the
+// Login method (older than interface v1.2) are handled by the launcher.
+func (t *Tray) login(instance string) {
+	c, cancel := ctx()
+	defer cancel()
+	err := t.conn.Object(instance, mountObj).CallWithContext(c, mountIface+".Login", 0).Err
+	if err == nil {
+		return
+	}
+	var derr dbus.Error
+	if errors.As(err, &derr) && (derr.Name == "org.freedesktop.DBus.Error.UnknownMethod" ||
+		derr.Name == "org.freedesktop.DBus.Error.UnknownObject") {
+		t.opts.Run("onedriver-launcher")
+		return
+	}
+	log.Warn().Err(err).Msg("Login() failed.")
+	msg := err.Error()
+	if errors.As(err, &derr) && len(derr.Body) > 0 {
+		if s, ok := derr.Body[0].(string); ok {
+			msg = s
+		}
+	}
+	t.notif.send(notification{Summary: "OneDrive", Body: "Could not open the login: " + msg, Icon: "dialog-error"})
+}
+
 // Do performs a menu action.
 func (t *Tray) Do(a Action) {
 	switch a.Kind {
@@ -371,6 +396,8 @@ func (t *Tray) Do(a Action) {
 		}
 	case ActQuit:
 		t.Quit()
+	case ActLogin:
+		t.login(a.Instance)
 	case ActPause, ActResume, ActSyncNow:
 		method := map[string]string{ActPause: "Pause", ActResume: "Resume", ActSyncNow: "SyncNow"}[a.Kind]
 		c, cancel := ctx()

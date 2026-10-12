@@ -80,7 +80,7 @@ func LoadConfig(path string) *Config {
 	xdgCacheDir, _ := os.UserCacheDir()
 	defaults := Config{
 		CacheDir: filepath.Join(xdgCacheDir, "onedriver"),
-		LogLevel: "debug",
+		LogLevel: "info",
 	}
 
 	conf, err := os.ReadFile(path)

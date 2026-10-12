@@ -40,6 +40,7 @@ type Instance struct {
 	QuotaTotal       uint64
 	LastSync         int64
 	LastError        string
+	AuthExpired      bool
 	Recent           []RecentItem
 }
 
@@ -109,6 +110,9 @@ func PendingText(up, down uint32) string {
 
 // StatusLine is the one-line status of an instance.
 func StatusLine(i Instance) string {
+	if i.AuthExpired {
+		return "Login expired"
+	}
 	switch i.state() {
 	case StateError:
 		if i.LastError != "" {
@@ -203,6 +207,7 @@ const (
 	ActPause      = "pause"
 	ActResume     = "resume"
 	ActSyncNow    = "sync"
+	ActLogin      = "login"
 	ActSettings   = "settings"
 	ActActivity   = "activity"
 	ActQuit       = "quit"
@@ -260,6 +265,9 @@ func instanceItems(i Instance) []*MenuItem {
 	}
 	m = append(m, recent)
 
+	if i.AuthExpired {
+		m = append(m, item("Log in…", &Action{Kind: ActLogin, Instance: i.BusName}))
+	}
 	if i.paused() {
 		m = append(m, item("Resume syncing", &Action{Kind: ActResume, Instance: i.BusName}))
 	} else {

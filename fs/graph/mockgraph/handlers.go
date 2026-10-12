@@ -77,7 +77,25 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"error": "invalid_request"})
 		return
 	}
-	switch r.PostForm.Get("grant_type") {
+	s.reqMu.Lock()
+	s.tokenForms = append(s.tokenForms, r.PostForm)
+	mode := s.tokenMode
+	s.reqMu.Unlock()
+	grant := r.PostForm.Get("grant_type")
+	if grant == "refresh_token" {
+		switch mode {
+		case TokenInvalidGrant:
+			writeJSON(w, 400, map[string]interface{}{
+				"error":             "invalid_grant",
+				"error_description": "AADSTS70000: the refresh token is no longer valid",
+			})
+			return
+		case TokenUnavailable:
+			writeJSON(w, 503, map[string]interface{}{"error": "server_error"})
+			return
+		}
+	}
+	switch grant {
 	case "authorization_code", "refresh_token":
 		writeJSON(w, 200, map[string]interface{}{
 			"token_type":    "Bearer",

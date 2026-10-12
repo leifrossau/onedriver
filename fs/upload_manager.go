@@ -167,7 +167,7 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 					// max active upload sessions are capped at this limit for faster
 					// uploads of individual files and also to prevent possible server-
 					// side throttling that can cause errors.
-					if inFlight < maxUploadsInFlight && !u.fs.Paused() {
+					if inFlight < maxUploadsInFlight && !u.fs.Paused() && !u.fs.AuthExpired() {
 						inFlight++
 						// mark as started synchronously so the next tick
 						// counts it even if the goroutine has not run yet
@@ -183,6 +183,13 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 					}
 
 				case uploadErrored:
+					if u.fs.AuthExpired() {
+						// not the upload's fault: keep it, without counting a
+						// retry, until the user logged in again
+						session.setState(uploadNotStarted, nil)
+						u.tr().setState(session.ID, status.DirUpload, status.TransferRetrying)
+						continue
+					}
 					session.retries++
 					if session.retries > 5 {
 						log.Error().
