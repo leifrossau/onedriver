@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -136,7 +137,11 @@ func (t *Tray) Run() error {
 		select {
 		case <-t.quit:
 			return nil
-		case sig := <-t.sigs:
+		case sig, ok := <-t.sigs:
+			if !ok || sig == nil {
+				// godbus closes the channel when the bus connection goes away
+				return errors.New("session bus connection closed")
+			}
 			t.handle(sig)
 		}
 	}
