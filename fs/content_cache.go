@@ -12,6 +12,9 @@ import (
 type LoopbackCache struct {
 	directory string
 	fds       sync.Map
+	// openM makes Open and Evict atomic with respect to each other, so content
+	// is never evicted from under a file descriptor that is just being opened.
+	openM sync.Mutex
 }
 
 func NewLoopbackCache(directory string) *LoopbackCache {
@@ -78,6 +81,8 @@ func (l *LoopbackCache) HasContent(id string) bool {
 
 // Open returns a filehandle for subsequent access
 func (l *LoopbackCache) Open(id string) (*os.File, error) {
+	l.openM.Lock()
+	defer l.openM.Unlock()
 	if fd, ok := l.fds.Load(id); ok {
 		// already opened, return existing fd
 		return fd.(*os.File), nil
@@ -105,4 +110,34 @@ func (l *LoopbackCache) Close(id string) {
 		file.Close()
 		l.fds.Delete(id)
 	}
+}
+
+// Evict removes the content file for an ID unless it currently has an open
+// file descriptor, and returns whether it did. Unlike Delete, it never closes
+// an fd in use.
+func (l *LoopbackCache) Evict(id string) bool {
+	l.openM.Lock()
+	defer l.openM.Unlock()
+	if _, ok := l.fds.Load(id); ok {
+		return false
+	}
+	return os.Remove(l.contentPath(id)) == nil
+}
+
+// Stat returns the file info of the content file for an ID, without opening
+// it.
+func (l *LoopbackCache) Stat(id string) (os.FileInfo, error) {
+	return os.Stat(l.contentPath(id))
+}
+
+// Install atomically replaces the content for an ID with the file at
+// srcPath, unless the ID currently has an open fd (in which case false is
+// returned and nothing is changed).
+func (l *LoopbackCache) Install(id string, srcPath string) (bool, error) {
+	l.openM.Lock()
+	defer l.openM.Unlock()
+	if _, ok := l.fds.Load(id); ok {
+		return false, nil
+	}
+	return true, os.Rename(srcPath, l.contentPath(id))
 }

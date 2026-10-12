@@ -17,6 +17,10 @@ import (
 // called as a goroutine
 func (f *Filesystem) DeltaLoop(interval time.Duration) {
 	log.Trace().Msg("Starting delta goroutine.")
+	if !f.startLoop() {
+		return
+	}
+	defer f.loops.Done()
 	for { // eva
 		// get deltas
 		log.Trace().Msg("Fetching deltas from server.")
@@ -78,10 +82,14 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 			})
 
 			// wait until next interval
-			time.Sleep(interval)
+			if !f.sleep(interval) {
+				return
+			}
 		} else {
 			// shortened duration while offline
-			time.Sleep(2 * time.Second)
+			if !f.sleep(2 * time.Second) {
+				return
+			}
 		}
 	}
 }
@@ -123,6 +131,32 @@ func (f *Filesystem) pollDeltas(auth *graph.Auth) ([]*graph.DriveItem, bool, err
 // * Changed content remotely, but not locally
 // * New items in a folder we have locally
 func (f *Filesystem) applyDelta(delta *graph.DriveItem) error {
+	// remember where the item was, to tell if it newly arrived somewhere
+	oldParentID, existed := "", false
+	if entry, ok := f.metadata.Load(delta.ID); ok {
+		existed = true
+		oldParentID = entry.(*Inode).ParentID()
+	}
+
+	err := f.applyDeltaItem(delta)
+
+	// Keep pinned content current: re-check pinned files after any change
+	// (the worker re-downloads them if their content changed), and walk
+	// folders that newly appeared in or were moved into a pinned folder.
+	if delta.Deleted == nil && f.pins != nil {
+		if entry, ok := f.metadata.Load(delta.ID); ok {
+			inode := entry.(*Inode)
+			isNew := !existed || oldParentID != inode.ParentID()
+			if (!inode.IsDir() || isNew) && f.isPinned(inode) {
+				f.pins.enqueue(delta.ID)
+			}
+		}
+	}
+	return err
+}
+
+// applyDeltaItem does the actual work of applyDelta.
+func (f *Filesystem) applyDeltaItem(delta *graph.DriveItem) error {
 	id := delta.ID
 	name := delta.Name
 	parentID := delta.Parent.ID
@@ -282,6 +316,14 @@ func (f *Filesystem) applyDelta(delta *graph.DriveItem) error {
 	switch action {
 	case conflict.Overwrite:
 		return nil
+	case conflict.Skip:
+		if remoteHash != "" && strings.EqualFold(remoteHash, localHash) {
+			// the server confirmed it has the content we have
+			local.Lock()
+			local.serverHash = remoteHash
+			local.Unlock()
+		}
+		return nil
 	case conflict.Conflict:
 		ctx.Warn().
 			Str("delta", "conflict").
@@ -313,6 +355,14 @@ func (f *Filesystem) applyDelta(delta *graph.DriveItem) error {
 	return nil
 }
 
+// remoteHashOf returns the QuickXorHash of a server item, if any.
+func remoteHashOf(item *graph.DriveItem) string {
+	if item.File == nil {
+		return ""
+	}
+	return item.File.Hashes.QuickXorHash
+}
+
 // overwriteFromDelta replaces a local file's metadata with the server's and
 // invalidates its cached content so the new version gets downloaded on next
 // open. Returns false (and changes nothing) if the local item has changes or
@@ -331,6 +381,7 @@ func (f *Filesystem) overwriteFromDelta(local *Inode, delta *graph.DriveItem, id
 	local.DriveItem.Size = delta.Size
 	local.DriveItem.ETag = delta.ETag
 	local.DriveItem.File = delta.File
+	local.serverHash = remoteHashOf(delta)
 	// Open() would also notice the hash mismatch and re-download, but drop the
 	// stale content now. Files that are currently open keep their fd and get
 	// refreshed by the checksum check on the next Open().

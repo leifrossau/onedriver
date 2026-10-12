@@ -28,16 +28,17 @@ const (
 
 const xattrPrefix = "user.onedriver."
 
-// xattrSpec describes one xattr we expose. A nil set means the attribute is
-// read-only. To add a writable attribute (e.g. user.onedriver.pinned), add an
-// entry to xattrs/xattrNames with a set func.
+// xattrSpec describes one xattr we expose. A nil get means the attribute is
+// write-only (it is then not listed either), a nil set means it is read-only.
+// remove is called by removexattr, which is refused if it is nil.
 type xattrSpec struct {
-	get func(f *Filesystem, inode *Inode) []byte
-	set func(f *Filesystem, inode *Inode, data []byte) fuse.Status
+	get    func(f *Filesystem, inode *Inode) []byte
+	set    func(f *Filesystem, inode *Inode, data []byte) fuse.Status
+	remove func(f *Filesystem, inode *Inode) fuse.Status
 }
 
 // xattrNames fixes the order attributes are listed in.
-var xattrNames = []string{"user.onedriver.state", "user.onedriver.id"}
+var xattrNames = []string{"user.onedriver.state", "user.onedriver.id", "user.onedriver.pinned"}
 
 var xattrs = map[string]xattrSpec{
 	"user.onedriver.state": {
@@ -52,6 +53,53 @@ var xattrs = map[string]xattrSpec{
 			return []byte(inode.DriveItem.ID)
 		},
 	},
+	// "1" if the item is kept on this device (pinned itself or inside a
+	// pinned folder), "0" otherwise. Writing 1/0 pins/unpins the item (for
+	// folders: with everything inside them), removing the attribute unpins.
+	// Only records the state, downloads happen in the background.
+	"user.onedriver.pinned": {
+		get: func(f *Filesystem, inode *Inode) []byte {
+			if f.isPinned(inode) {
+				return []byte("1")
+			}
+			return []byte("0")
+		},
+		set: func(f *Filesystem, inode *Inode, data []byte) fuse.Status {
+			pinned, ok := parseBoolXAttr(data)
+			if !ok {
+				return fuse.EINVAL
+			}
+			f.setPinned(inode, pinned)
+			return fuse.OK
+		},
+		remove: func(f *Filesystem, inode *Inode) fuse.Status {
+			f.setPinned(inode, false)
+			return fuse.OK
+		},
+	},
+	// Writing any value frees up the space used by the item's cached content
+	// (for folders: of everything inside them). Pinned, open or modified
+	// files are skipped; for a single file that cannot be evicted, EBUSY is
+	// returned.
+	"user.onedriver.evict": {
+		set: func(f *Filesystem, inode *Inode, data []byte) fuse.Status {
+			if _, err := f.EvictContent(inode.ID()); err != nil {
+				return fuse.EBUSY
+			}
+			return fuse.OK
+		},
+	},
+}
+
+// parseBoolXAttr parses the value written to a boolean attribute.
+func parseBoolXAttr(data []byte) (value bool, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(strings.TrimRight(string(data), "\x00"))) {
+	case "1", "true", "yes", "on":
+		return true, true
+	case "0", "false", "no", "off", "":
+		return false, true
+	}
+	return false, false
 }
 
 // combineSyncState is the pure logic that merges the three sources of sync
@@ -106,7 +154,7 @@ func (f *Filesystem) SyncState(id string) SyncState {
 // GetXAttr reads an extended attribute.
 func (f *Filesystem) GetXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr string, dest []byte) (uint32, fuse.Status) {
 	spec, ok := xattrs[attr]
-	if !ok {
+	if !ok || spec.get == nil {
 		return 0, fuse.ENOATTR
 	}
 	inode := f.GetNodeID(header.NodeId)
@@ -138,7 +186,8 @@ func fillXAttr(value, dest []byte) (uint32, fuse.Status) {
 	return uint32(copy(dest, value)), fuse.OK
 }
 
-// SetXAttr only accepts writable user.onedriver.* attributes (currently none).
+// SetXAttr only accepts the writable user.onedriver.* attributes
+// (user.onedriver.pinned and user.onedriver.evict).
 func (f *Filesystem) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, attr string, data []byte) fuse.Status {
 	if !strings.HasPrefix(attr, xattrPrefix) {
 		return fuse.ENOTSUP
@@ -154,10 +203,18 @@ func (f *Filesystem) SetXAttr(cancel <-chan struct{}, input *fuse.SetXAttrIn, at
 	return spec.set(f, inode, data)
 }
 
-// RemoveXAttr is not supported; our attributes are read-only.
+// RemoveXAttr is only supported for user.onedriver.pinned (it unpins).
 func (f *Filesystem) RemoveXAttr(cancel <-chan struct{}, header *fuse.InHeader, attr string) fuse.Status {
-	if strings.HasPrefix(attr, xattrPrefix) {
+	if !strings.HasPrefix(attr, xattrPrefix) {
+		return fuse.ENOTSUP
+	}
+	spec, ok := xattrs[attr]
+	if !ok || spec.remove == nil {
 		return fuse.EPERM
 	}
-	return fuse.ENOTSUP
+	inode := f.GetNodeID(header.NodeId)
+	if inode == nil {
+		return fuse.ENOENT
+	}
+	return spec.remove(f, inode)
 }

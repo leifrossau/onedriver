@@ -46,3 +46,36 @@ func TestWriteConfig(t *testing.T) {
 	conf := LoadConfig(filepath.Join(configTestDir, "config-test.yml"))
 	assert.NoError(t, conf.WriteConfig("tmp/nested/config.yml"))
 }
+
+func TestParseSize(t *testing.T) {
+	t.Parallel()
+	tests := map[string]uint64{
+		"":      0,
+		"0":     0,
+		"1234":  1234,
+		"1K":    1024,
+		"10G":   10 << 30,
+		"10GB":  10 << 30,
+		"10GiB": 10 << 30,
+		"512m":  512 << 20,
+		"1.5T":  3 << 39,
+		" 2 G ": 2 << 30,
+		"100B":  100,
+	}
+	for in, want := range tests {
+		got, err := ParseSize(in)
+		assert.NoError(t, err, in)
+		assert.Equal(t, want, got, in)
+	}
+	for _, in := range []string{"abc", "-1G", "G", "10X"} {
+		_, err := ParseSize(in)
+		assert.Error(t, err, in)
+	}
+}
+
+func TestLoadConfigEviction(t *testing.T) {
+	t.Parallel()
+	conf := LoadConfig(filepath.Join(configTestDir, "config-test-eviction.yml"))
+	assert.Equal(t, "10G", conf.CacheLimit)
+	assert.Equal(t, 30, conf.EvictAfterDays)
+}

@@ -2,6 +2,7 @@ package fs
 
 import (
 	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 
@@ -87,15 +88,37 @@ func NewUploadManager(duration time.Duration, db *bolt.DB, fs *Filesystem, auth 
 			return nil
 		})
 	})
-	go manager.uploadLoop(duration)
+	if fs != nil {
+		if fs.startLoop() {
+			go func() {
+				defer fs.loops.Done()
+				manager.uploadLoop(duration)
+			}()
+		}
+	} else {
+		go manager.uploadLoop(duration)
+	}
 	return &manager
+}
+
+// stopped returns a channel that is closed once the filesystem is stopped.
+func (u *UploadManager) stopped() <-chan struct{} {
+	if u.fs == nil {
+		return nil
+	}
+	return u.fs.stopCh
 }
 
 // uploadLoop manages the deduplication and tracking of uploads
 func (u *UploadManager) uploadLoop(duration time.Duration) {
 	ticker := time.NewTicker(duration)
+	defer ticker.Stop()
+	stop := u.stopped()
 	for {
 		select {
+		case <-stop:
+			return
+
 		case session := <-u.queue: // new sessions
 			u.resolveSession(session)
 			// deduplicate sessions for the same item
@@ -215,6 +238,9 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 					if inode := u.fs.GetID(session.ID); inode != nil {
 						inode.Lock()
 						inode.DriveItem.ETag = session.ETag
+						// the server now has this content, so a clean
+						// cached copy of it may be evicted
+						inode.serverHash = session.QuickXORHash
 						inode.Unlock()
 					}
 
@@ -256,8 +282,15 @@ func (u *UploadManager) queueReservedUpload(inode *Inode, reservedID string) err
 		return err
 	}
 	session.reservedID = reservedID
-	u.queue <- session
-	return nil
+	select {
+	case u.queue <- session:
+		return nil
+	case <-u.stopped():
+		u.sessionsM.Lock()
+		u.releaseLocked(reservedID)
+		u.sessionsM.Unlock()
+		return errors.New("filesystem is shutting down")
+	}
 }
 
 // releaseLocked drops a reservation. sessionsM must be held.
@@ -328,7 +361,10 @@ func (u *UploadManager) UploadedHashes(ids ...string) []string {
 
 // CancelUpload is used to kill any pending uploads for a session
 func (u *UploadManager) CancelUpload(id string) {
-	u.deletionQueue <- id
+	select {
+	case u.deletionQueue <- id:
+	case <-u.stopped():
+	}
 }
 
 // MoveUpload re-keys any pending upload (session, reservations and uploaded
@@ -340,8 +376,15 @@ func (u *UploadManager) CancelUpload(id string) {
 // held.
 func (u *UploadManager) MoveUpload(oldID, newID string) {
 	req := moveRequest{oldID: oldID, newID: newID, done: make(chan struct{})}
-	u.moveQueue <- req
-	<-req.done
+	select {
+	case u.moveQueue <- req:
+	case <-u.stopped():
+		return
+	}
+	select {
+	case <-req.done:
+	case <-u.stopped():
+	}
 }
 
 // moveUpload implements MoveUpload. Only called on the upload loop goroutine,

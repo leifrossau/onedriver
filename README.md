@@ -167,6 +167,51 @@ systemctl --user enable --now $SERVICE_NAME
 journalctl --user -u $SERVICE_NAME --since today
 ```
 
+## Pinning / free up space
+
+Files are normally only downloaded when you open them. Like "Always keep on
+this device" on Windows, you can pin files or folders so their content is
+downloaded in the background and kept up to date, so they are available
+offline. Pinning a folder pins everything inside it, including files that are
+added to it later; moving a file out of a pinned folder unpins it (unless it
+was pinned itself).
+
+```bash
+# pin a file or folder (returns immediately, downloads happen in the background)
+setfattr -n user.onedriver.pinned -v 1 ~/OneDrive/Documents
+
+# is it pinned? (1 or 0, also 1 for items inside a pinned folder)
+getfattr -n user.onedriver.pinned --only-values ~/OneDrive/Documents/report.docx
+
+# unpin (keeps the downloaded content)
+setfattr -n user.onedriver.pinned -v 0 ~/OneDrive/Documents
+# or equivalently
+setfattr -x user.onedriver.pinned ~/OneDrive/Documents
+
+# "free up space": drop the downloaded content of a file or of everything in a
+# folder. The files stay visible and are downloaded again when opened. Pinned,
+# open and not yet uploaded files are skipped.
+setfattr -n user.onedriver.evict -v 1 ~/OneDrive/Pictures
+
+# where is a file in its sync lifecycle? (cloud, local, modified, uploading, error)
+getfattr -n user.onedriver.state --only-values ~/OneDrive/Documents/report.docx
+```
+
+Cached content of files that are not pinned can also be evicted automatically.
+This is off by default and enabled in the config file
+(`~/.config/onedriver/config.yml`):
+
+```yaml
+# maximum size of cached file content ("500M", "10G", or bytes); when exceeded,
+# the least recently opened unpinned content is evicted
+cacheLimit: 10G
+# evict unpinned content that was not opened for this many days
+evictAfterDays: 30
+```
+
+Only content that is not pinned, not open, and has no local changes waiting to
+be uploaded is ever evicted.
+
 ## Building onedriver yourself
 
 In addition to the traditional [Go tooling](https://golang.org/dl/), you will

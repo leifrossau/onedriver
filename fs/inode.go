@@ -29,6 +29,11 @@ type Inode struct {
 	hasChanges bool     // used to trigger an upload on flush
 	subdir     uint32   // used purely by NLink()
 	mode       uint32   // do not set manually
+	pin        pinState // explicit pin state, see pin.go
+	// serverHash is the content hash the server is known to have for this item
+	// (set from server responses and completed uploads, never persisted). Only
+	// content matching it may be evicted from the cache.
+	serverHash string
 }
 
 // SerializeableInode is like a Inode, but can be serialized for local storage
@@ -38,6 +43,9 @@ type SerializeableInode struct {
 	Children []string
 	Subdir   uint32
 	Mode     uint32
+	// Pin is the explicit pin state (0 = inherit from the parent folder, which
+	// is also what databases written before pinning existed decode to).
+	Pin pinState `json:"pin,omitempty"`
 }
 
 // NewInode initializes a new Inode
@@ -76,6 +84,7 @@ func (i *Inode) AsJSON() []byte {
 		Children:  i.children,
 		Subdir:    i.subdir,
 		Mode:      i.mode,
+		Pin:       i.pin,
 	})
 	return data
 }
@@ -93,6 +102,7 @@ func NewInodeJSON(data []byte) (*Inode, error) {
 		children:  raw.Children,
 		mode:      raw.Mode,
 		subdir:    raw.Subdir,
+		pin:       raw.Pin,
 	}, nil
 }
 
@@ -101,9 +111,13 @@ func NewInodeDriveItem(item *graph.DriveItem) *Inode {
 	if item == nil {
 		return nil
 	}
-	return &Inode{
+	inode := &Inode{
 		DriveItem: *item,
 	}
+	if item.File != nil {
+		inode.serverHash = item.File.Hashes.QuickXorHash
+	}
+	return inode
 }
 
 // String is only used for debugging by go-fuse

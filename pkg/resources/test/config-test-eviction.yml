@@ -1,0 +1,2 @@
+cacheLimit: 10G
+evictAfterDays: 30

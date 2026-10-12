@@ -420,7 +420,7 @@ func (f *Filesystem) Mknod(cancel <-chan struct{}, in *fuse.MknodIn, name string
 }
 
 // Create creates a regular file and opens it. The server doesn't have this yet.
-func (f *Filesystem) Create(cancel <-chan struct{}, in *fuse.CreateIn, name string, out *fuse.CreateOut) fuse.Status {
+func (f *Filesystem) create(cancel <-chan struct{}, in *fuse.CreateIn, name string, out *fuse.CreateOut) fuse.Status {
 	// we reuse mknod here
 	result := f.Mknod(
 		cancel,
@@ -447,17 +447,81 @@ func (f *Filesystem) Create(cancel <-chan struct{}, in *fuse.CreateIn, name stri
 			Msg("Child inode already exists, truncating.")
 		f.content.Delete(child.ID())
 		f.content.Open(child.ID())
+		child.Lock()
 		child.DriveItem.Size = 0
 		child.hasChanges = true
+		child.Unlock()
 		return fuse.OK
 	}
 	// no further initialized required to open the file, it's empty
 	return result
 }
 
-// Open fetches a Inodes's content and initializes the .Data field with actual
-// data from the server.
+// Create creates a regular file and opens it.
+func (f *Filesystem) Create(cancel <-chan struct{}, in *fuse.CreateIn, name string, out *fuse.CreateOut) fuse.Status {
+	status := f.create(cancel, in, name, out)
+	if status == fuse.OK {
+		nodeID := out.NodeId
+		if nodeID == 0 {
+			if child, _ := f.GetChild(f.TranslateID(in.NodeId), name, nil); child != nil {
+				nodeID = child.NodeID()
+			}
+		}
+		f.addOpenHandle(nodeID, 1)
+	}
+	return status
+}
+
+// Open fetches an Inode's content, downloading it if the cached copy is
+// missing or outdated.
 func (f *Filesystem) Open(cancel <-chan struct{}, in *fuse.OpenIn, out *fuse.OpenOut) fuse.Status {
+	status := f.open(cancel, in, out)
+	if status == fuse.OK {
+		f.addOpenHandle(in.NodeId, 1)
+		if id := f.TranslateID(in.NodeId); id != "" {
+			f.touchContent(id)
+		}
+	}
+	return status
+}
+
+// Release is called once the kernel has no more references to a file handle
+// returned by Open or Create.
+func (f *Filesystem) Release(cancel <-chan struct{}, in *fuse.ReleaseIn) {
+	f.addOpenHandle(in.NodeId, -1)
+}
+
+// addOpenHandle tracks the number of open kernel file handles per node, so
+// content of open files is never evicted.
+func (f *Filesystem) addOpenHandle(nodeID uint64, n int) {
+	if nodeID == 0 {
+		return
+	}
+	f.openHandlesM.Lock()
+	defer f.openHandlesM.Unlock()
+	if f.openHandles[nodeID]+n <= 0 {
+		delete(f.openHandles, nodeID)
+	} else {
+		f.openHandles[nodeID] += n
+	}
+}
+
+// hasOpenHandles returns true if the kernel has the node open.
+func (f *Filesystem) hasOpenHandles(nodeID uint64) bool {
+	f.openHandlesM.Lock()
+	defer f.openHandlesM.Unlock()
+	return f.openHandles[nodeID] > 0
+}
+
+// touchContent records an access to an item's cached content (its atime is
+// used for eviction), leaving the mtime unchanged.
+func (f *Filesystem) touchContent(id string) {
+	if st, err := f.content.Stat(id); err == nil && st.Mode().IsRegular() {
+		os.Chtimes(f.content.contentPath(id), time.Now(), st.ModTime())
+	}
+}
+
+func (f *Filesystem) open(cancel <-chan struct{}, in *fuse.OpenIn, out *fuse.OpenOut) fuse.Status {
 	id := f.TranslateID(in.NodeId)
 	inode := f.GetID(id)
 	if inode == nil {
@@ -586,7 +650,10 @@ func (f *Filesystem) lockDownload(id string) (unlock func(), wait bool) {
 
 // downloadContent fetches an item's content from the server (without holding
 // the inode lock) and installs it into the content cache if the inode did not
-// change in the meantime.
+// change in the meantime. fd is the open cache fd to write the content into.
+// If fd is nil (background hydration), the verified download is renamed into
+// place instead, so no fd is left open, unless the file got opened meanwhile.
+// The caller must hold the download lock for the ID (see lockDownload).
 func (f *Filesystem) downloadContent(ctx zerolog.Logger, inode *Inode, fd *os.File, remoteHash string) fuse.Status {
 	id := inode.ID()
 	ctx.Info().Msg(
@@ -623,12 +690,47 @@ func (f *Filesystem) downloadContent(ctx zerolog.Logger, inode *Inode, fd *os.Fi
 		ctx.Warn().Msg("Local changes made during download, keeping local content.")
 		return fuse.OK
 	}
+
+	if fd == nil {
+		// background download: move the verified file into place, unless
+		// somebody opened the file meanwhile (then copy into their fd below)
+		temp.Sync()
+		installed, err := f.content.Install(id, f.content.contentPath(tempID))
+		if err != nil {
+			ctx.Error().Err(err).Msg("Could not install downloaded content.")
+			return fuse.EIO
+		}
+		if installed {
+			inode.DriveItem.Size = size
+			f.markVerified(id, remoteHash)
+			return fuse.OK
+		}
+		if fd, err = f.content.Open(id); err != nil {
+			ctx.Error().Err(err).Msg("Could not open cache file.")
+			return fuse.EIO
+		}
+	}
 	temp.Seek(0, 0) // being explicit, even though already done in hashstream func
 	fd.Seek(0, 0)
 	fd.Truncate(0)
 	io.Copy(fd, temp)
 	inode.DriveItem.Size = size
+	if st, err := fd.Stat(); err == nil {
+		f.verified.Store(id, verifiedContent{
+			hash: strings.ToLower(remoteHash), size: st.Size(), mtime: st.ModTime(),
+		})
+	}
 	return fuse.OK
+}
+
+// markVerified records that the content file for id, as it is on disk now,
+// has the given hash.
+func (f *Filesystem) markVerified(id string, hash string) {
+	if st, err := f.content.Stat(id); err == nil {
+		f.verified.Store(id, verifiedContent{
+			hash: strings.ToLower(hash), size: st.Size(), mtime: st.ModTime(),
+		})
+	}
 }
 
 // Unlink deletes a child file.
@@ -945,6 +1047,11 @@ func (f *Filesystem) Rename(cancel <-chan struct{}, in *fuse.RenameIn, name stri
 	if err = f.MovePath(oldParentID, newParentID, name, newName, f.auth); err != nil {
 		ctx.Error().Err(err).Msg("Failed to rename local item.")
 		return fuse.EIO
+	}
+
+	// moved into a pinned folder: make sure it is (and stays) downloaded
+	if moved := f.GetID(id); moved != nil && f.pins != nil && f.isPinned(moved) {
+		f.pins.enqueue(id)
 	}
 
 	// whew! item renamed
