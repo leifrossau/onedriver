@@ -125,6 +125,14 @@ func main() {
 	log.Info().Msgf("onedriver %s", common.Version())
 	auth := graph.Authenticate(config.AuthConfig, authPath, *headless)
 	filesystem := fs.NewFilesystem(auth, cachePath)
+	cacheLimit, err := common.ParseSize(config.CacheLimit)
+	if err != nil {
+		log.Error().Err(err).Msg("Invalid cacheLimit in configuration, not limiting the cache size.")
+	}
+	filesystem.SetCacheOptions(fs.CacheOptions{
+		CacheLimit: cacheLimit,
+		EvictAfter: time.Duration(config.EvictAfterDays) * 24 * time.Hour,
+	})
 	go filesystem.DeltaLoop(30 * time.Second)
 	xdgVolumeInfo(filesystem, auth)
 
@@ -150,6 +158,7 @@ func main() {
 		Str("mountpoint", absMountPath).
 		Msg("Serving filesystem.")
 	server.Serve()
+	filesystem.Stop()
 }
 
 // xdgVolumeInfo createx .xdg-volume-info for a nice little onedrive logo in the

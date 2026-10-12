@@ -12,6 +12,15 @@ log: debug
 # This directory can get pretty large. "~" is a placeholder for your home directory.
 cacheDir: ~/.cache/onedriver
 
+# Automatic eviction of cached file content ("free up space"). Off by default.
+# Only content of files that are not pinned ("always keep on this device"), not
+# open and fully uploaded is ever evicted; the files themselves stay visible
+# and are downloaded again when opened.
+# cacheLimit: maximum size of cached content, e.g. "10G", "500M" or bytes.
+#cacheLimit: 10G
+# evictAfterDays: evict content not opened for this many days.
+#evictAfterDays: 30
+
 # Don't uncomment or change this unless you are a super duper expert and have
 # registered your own version of onedriver in Azure Active Directory. These are the
 # default values.
