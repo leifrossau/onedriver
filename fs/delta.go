@@ -8,6 +8,7 @@ import (
 
 	"github.com/jstaf/onedriver/fs/conflict"
 	"github.com/jstaf/onedriver/fs/graph"
+	"github.com/jstaf/onedriver/fs/status"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	bolt "go.etcd.io/bbolt"
@@ -22,6 +23,14 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 	}
 	defer f.loops.Done()
 	for { // eva
+		// no polling while paused, Resume and SyncNow wake us up
+		if f.Paused() {
+			if !f.sleepOrWake(time.Second) {
+				return
+			}
+			continue
+		}
+
 		// get deltas
 		log.Trace().Msg("Fetching deltas from server.")
 		pollSuccess := false
@@ -76,13 +85,14 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 			}
 			f.offline = false
 			f.Unlock()
+			f.noteSyncSuccess()
 
 			f.db.Batch(func(tx *bolt.Tx) error {
 				return tx.Bucket(bucketDelta).Put([]byte("deltaLink"), []byte(f.deltaLink))
 			})
 
-			// wait until next interval
-			if !f.sleep(interval) {
+			// wait until next interval (or until SyncNow)
+			if !f.sleepOrWake(interval) {
 				return
 			}
 		} else {
@@ -192,6 +202,9 @@ func (f *Filesystem) applyDeltaItem(delta *graph.DriveItem) error {
 		}
 		ctx.Info().Str("delta", "delete").
 			Msg("Applying server-side deletion of item.")
+		if local != nil {
+			f.recordActivity(local.Path(), status.ActionDeleted)
+		}
 		f.DeleteID(id)
 		return nil
 	}
@@ -456,5 +469,6 @@ func (f *Filesystem) createConflictCopy(delta *graph.DriveItem, ctx zerolog.Logg
 		Str("conflictName", name).
 		Str("conflictID", item.ID).
 		Msg("Saved server version as conflict copy, uploading it.")
+	f.noteConflict(copyInode.Path())
 	return f.uploads.QueueUpload(copyInode)
 }

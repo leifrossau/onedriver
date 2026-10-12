@@ -209,6 +209,9 @@ func (w *pinWorker) loop() {
 // step runs one round of the worker: rescans if due, starts queued jobs and
 // runs eviction if due. Nothing happens while offline.
 func (w *pinWorker) step(jobs *sync.WaitGroup) {
+	if w.f.Paused() {
+		return
+	}
 	if w.f.IsOffline() {
 		w.mu.Lock()
 		w.wasOffline = true

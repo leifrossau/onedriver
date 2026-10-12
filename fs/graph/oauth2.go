@@ -49,6 +49,10 @@ type Auth struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	path         string // auth tokens remember their path for use by Refresh()
+
+	// failureHandler is called when tokens could not be renewed and the
+	// user has to log in again (see OnRenewalFailure)
+	failureHandler func(msg string)
 }
 
 // AuthError is an authentication error from the Microsoft API. Generally we don't see
@@ -83,6 +87,13 @@ func (a *Auth) FromFile(file string) error {
 		return err
 	}
 	return a.applyDefaults()
+}
+
+// OnRenewalFailure registers a function that is called (before the login is
+// attempted again) whenever renewing the access tokens fails and the user must
+// authenticate again. It must not block.
+func (a *Auth) OnRenewalFailure(handler func(msg string)) {
+	a.failureHandler = handler
 }
 
 // Refresh auth tokens if expired.
@@ -122,6 +133,9 @@ func (a *Auth) Refresh() {
 				Bytes("response", body).
 				Int("http_code", resp.StatusCode).
 				Msg("Failed to renew access tokens. Attempting to reauthenticate.")
+			if a.failureHandler != nil {
+				a.failureHandler("Could not renew the OneDrive access tokens, please log in again.")
+			}
 			a = newAuth(a.AuthConfig, a.path, false)
 		} else {
 			a.ToFile(a.path)

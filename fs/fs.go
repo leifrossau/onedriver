@@ -12,6 +12,7 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/jstaf/onedriver/fs/graph"
+	"github.com/jstaf/onedriver/fs/status"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -662,6 +663,15 @@ func (f *Filesystem) lockDownload(id string) (unlock func(), wait bool) {
 // place instead, so no fd is left open, unless the file got opened meanwhile.
 // The caller must hold the download lock for the ID (see lockDownload).
 func (f *Filesystem) downloadContent(ctx zerolog.Logger, inode *Inode, fd *os.File, remoteHash string) fuse.Status {
+	st := f.fetchContent(ctx, inode, fd, remoteHash)
+	if st == fuse.OK {
+		f.recordActivity(inode.Path(), status.ActionDownloaded)
+	}
+	return st
+}
+
+// fetchContent does the work of downloadContent.
+func (f *Filesystem) fetchContent(ctx zerolog.Logger, inode *Inode, fd *os.File, remoteHash string) fuse.Status {
 	id := inode.ID()
 	ctx.Info().Msg(
 		"Not using cached item due to file hash mismatch, fetching content from API.",
