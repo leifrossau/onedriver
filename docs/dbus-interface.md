@@ -84,7 +84,11 @@ Downloads include files opened by applications and pinned files being
 hydrated. Bytes done is updated while data is transferred (per chunk for
 large uploads, continuously for downloads); small uploads go from 0 to done
 in one step. Finished transfers disappear from the list and show up in
-`GetRecent`.
+`GetRecent`. Files that applications read only partly are fetched in ranges:
+while ranges of such a file are being fetched, it is listed as an active
+download with bytes total = the file size and bytes done = the bytes of it
+that are cached so far (it shows up in `GetRecent` as downloaded once the
+whole file has been fetched).
 
 ## Signals
 

@@ -673,7 +673,7 @@ func (f *Filesystem) persistInodes(inodes []*Inode) {
 // the given hash. Files are only hashed if they changed since they were last
 // verified. Does not use (or create) the shared cache fds.
 func (f *Filesystem) contentMatches(id string, hash string) bool {
-	if hash == "" {
+	if hash == "" || f.isPartial(id) {
 		return false
 	}
 	st, err := f.content.Stat(id)
@@ -898,6 +898,10 @@ func (f *Filesystem) evictFile(inode *Inode) (bool, error) {
 	if hasChanges || f.uploads.IsUploadPending(id) {
 		return false, errEvictChanged
 	}
+	if f.isPartial(id) {
+		// partially downloaded files are clean copies of server content
+		return f.evictPartial(inode)
+	}
 	if hash == "" || !strings.EqualFold(hash, serverHash) || !f.contentMatches(id, hash) {
 		return false, errEvictUnknown
 	}
@@ -924,6 +928,30 @@ func (f *Filesystem) evictFile(inode *Inode) (bool, error) {
 		return false, errEvictBusy
 	}
 	log.Info().Str("id", id).Str("name", inode.DriveItem.Name).Msg("Evicted cached content.")
+	return true, nil
+}
+
+// evictPartial is evictFile for partially downloaded files (see partial.go).
+func (f *Filesystem) evictPartial(inode *Inode) (bool, error) {
+	id := inode.ID()
+	unlock, ok := f.tryLockDownload(id)
+	if !ok {
+		return false, errEvictBusy
+	}
+	defer unlock()
+	inode.Lock()
+	defer inode.Unlock()
+	if inode.hasChanges || f.uploads.IsUploadPending(id) || f.GetID(id) != inode {
+		return false, errEvictChanged
+	}
+	if f.hasOpenHandles(inode.nodeID) {
+		return false, errEvictBusy
+	}
+	if !f.content.Evict(id) { // also drops the cached ranges
+		return false, errEvictBusy
+	}
+	log.Info().Str("id", id).Str("name", inode.DriveItem.Name).
+		Msg("Evicted partially cached content.")
 	return true, nil
 }
 
@@ -993,7 +1021,7 @@ func (f *Filesystem) evictCache(opts CacheOptions) {
 		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
-		size := uint64(info.Size())
+		size := diskUsage(info)
 		total += size
 		name := entry.Name()
 		if strings.HasPrefix(name, "temp-") || isLocalID(name) {

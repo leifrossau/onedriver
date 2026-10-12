@@ -333,7 +333,7 @@ func (f *Filesystem) refreshCacheSize() {
 	entries, _ := os.ReadDir(f.content.directory)
 	for _, e := range entries {
 		if info, err := e.Info(); err == nil && info.Mode().IsRegular() {
-			total += uint64(info.Size())
+			total += diskUsage(info)
 		}
 	}
 	f.ctl.mu.Lock()

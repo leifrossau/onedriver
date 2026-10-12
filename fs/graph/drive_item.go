@@ -3,6 +3,7 @@ package graph
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -183,7 +184,8 @@ func GetItemContentStream(id string, auth *Auth, output io.Writer) (uint64, erro
 
 	// multipart download
 	var n uint64
-	for i := 0; i < int(item.Size/downloadChunkSize)+1; i++ {
+	// (sizes that are a multiple of the chunk size have no partial last chunk)
+	for i := 0; uint64(i)*downloadChunkSize < item.Size; i++ {
 		start := i * downloadChunkSize
 		end := start + downloadChunkSize - 1
 		log.Info().
@@ -209,6 +211,38 @@ func GetItemContentStream(id string, auth *Auth, output io.Writer) (uint64, erro
 		Uint64("size", n).
 		Msgf("Download completed!")
 	return n, nil
+}
+
+// ErrShortRange is returned by GetItemContentRange if the server returned
+// fewer bytes than requested (the item is smaller than we think it is).
+var ErrShortRange = errors.New("server returned fewer bytes than requested")
+
+// GetItemContentRange downloads the bytes [start, end) of an item's content
+// with an HTTP Range request. size is the item's expected total size: if the
+// server ignores the Range header and sends the whole file, the requested part
+// is cut out of it.
+func GetItemContentRange(id string, auth *Auth, start, end, size int64) ([]byte, error) {
+	if end <= start {
+		return []byte{}, nil
+	}
+	content, err := Get(fmt.Sprintf("/me/drive/items/%s/content", id), auth, Header{
+		key:   "Range",
+		value: fmt.Sprintf("bytes=%d-%d", start, end-1),
+	})
+	if err != nil {
+		return nil, err
+	}
+	want := end - start
+	switch n := int64(len(content)); {
+	case n == want:
+		return content, nil
+	case start > 0 && n == size && size >= end:
+		// Range was ignored, we got the whole file
+		return content[start:end], nil
+	case n < want:
+		return nil, ErrShortRange
+	}
+	return nil, fmt.Errorf("server returned %d bytes for a %d byte range", len(content), want)
 }
 
 // Remove removes a directory or file by ID

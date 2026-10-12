@@ -162,7 +162,7 @@ func (t *thumbnailer) consider(c *Inode) {
 	id := c.ID()
 	// A file that is stored locally can be thumbnailed by the file manager
 	// without a download. Files with local changes are not on the server yet.
-	if t.f.content.HasContent(id) || c.HasChanges() || strings.HasPrefix(id, "local-") {
+	if t.f.hasFullContent(id) || c.HasChanges() || strings.HasPrefix(id, "local-") {
 		return
 	}
 	job := thumbJob{id: id, path: c.Path(), mtime: c.ModTime(), size: c.Size()}
@@ -227,7 +227,7 @@ func (t *thumbnailer) process(job thumbJob) {
 			missing = true
 		}
 	}
-	if !missing || t.f.content.HasContent(job.id) {
+	if !missing || t.f.hasFullContent(job.id) {
 		return
 	}
 	if !t.throttle() {

@@ -311,6 +311,21 @@ evictAfterDays: 30
 Only content that is not pinned, not open, and has no local changes waiting to
 be uploaded is ever evicted.
 
+### Partial downloads
+
+Opening a file does not download it. Only the parts an application actually
+reads are fetched (in chunks of 256 KiB, with a growing read-ahead of up to
+8 MiB when a file is read sequentially, e.g. video playback), so a file
+manager reading a few KB of metadata (image dimensions, EXIF, PDF info) does
+not download whole photos or documents. Files of up to 1 MiB are downloaded
+in one go on their first read. A partially downloaded file stays in the
+`cloud` state; once every byte has been read it is checked against OneDrive's
+QuickXorHash and becomes `local` (on a mismatch it is downloaded again in
+full). Before a file is changed (written to, truncated or opened for
+writing) it is always downloaded completely, and pinned files are always
+downloaded completely. Reading parts that are not downloaded yet fails with an
+I/O error while offline.
+
 ## Thumbnails in file managers
 
 File managers like Dolphin or Nautilus create previews by opening each image or

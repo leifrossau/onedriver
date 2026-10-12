@@ -54,6 +54,7 @@ type node struct {
 	seq              int64 // sequence number of the last change, for delta
 	deleted          bool
 	facet            string // "vault" or "package:<type>": neither file nor folder
+	hash             string // cached QuickXorHash of data ("" = not computed yet)
 }
 
 // Server is a fake Microsoft Graph server.
@@ -72,6 +73,12 @@ type Server struct {
 	paused  map[string]bool // path prefixes whose uploads are held
 	failing map[string]int  // path prefixes whose uploads are rejected, by status
 	failDL  map[string]int  // path prefixes whose downloads are rejected, by status
+
+	dlMu      sync.Mutex
+	dlBytes   map[string]int64         // content bytes served, by item ID
+	dlRanges  map[string][]string      // Range headers of content requests ("" = whole file), by item ID
+	dlCorrupt map[string]int           // item IDs whose next n content responses are corrupted
+	dlDelay   map[string]time.Duration // delay before serving content, by item ID
 
 	reqMu      sync.Mutex
 	requests   []string
@@ -115,6 +122,11 @@ func New() *Server {
 		paused:  make(map[string]bool),
 		failing: make(map[string]int),
 		failDL:  make(map[string]int),
+
+		dlBytes:   make(map[string]int64),
+		dlRanges:  make(map[string][]string),
+		dlCorrupt: make(map[string]int),
+		dlDelay:   make(map[string]time.Duration),
 	}
 	s.pauseCV = sync.NewCond(&s.pauseMu)
 	now := time.Now().UTC()
@@ -220,6 +232,57 @@ func (s *Server) StopFailingDownloads(pathPrefix string) {
 	s.pauseMu.Lock()
 	defer s.pauseMu.Unlock()
 	delete(s.failDL, path.Clean("/"+pathPrefix))
+}
+
+// DownloadedBytes returns how many content bytes were served for an item.
+func (s *Server) DownloadedBytes(id string) int64 {
+	s.dlMu.Lock()
+	defer s.dlMu.Unlock()
+	return s.dlBytes[id]
+}
+
+// ContentRanges returns the Range headers of all content requests for an
+// item, in order ("" for a request of the whole file).
+func (s *Server) ContentRanges(id string) []string {
+	s.dlMu.Lock()
+	defer s.dlMu.Unlock()
+	return append([]string(nil), s.dlRanges[id]...)
+}
+
+// CorruptDownloads makes the next n content responses for an item carry
+// wrong bytes (the first byte of the response is flipped).
+func (s *Server) CorruptDownloads(id string, n int) {
+	s.dlMu.Lock()
+	defer s.dlMu.Unlock()
+	s.dlCorrupt[id] = n
+}
+
+// SetDownloadDelay delays the content responses for an item by d (0 to
+// disable). The delay happens without holding the server state lock.
+func (s *Server) SetDownloadDelay(id string, d time.Duration) {
+	s.dlMu.Lock()
+	defer s.dlMu.Unlock()
+	s.dlDelay[id] = d
+}
+
+// noteDownload records a content request and returns whether its response
+// must be corrupted.
+func (s *Server) noteDownload(id, rng string, n int) bool {
+	s.dlMu.Lock()
+	defer s.dlMu.Unlock()
+	s.dlBytes[id] += int64(n)
+	s.dlRanges[id] = append(s.dlRanges[id], rng)
+	if s.dlCorrupt[id] > 0 {
+		s.dlCorrupt[id]--
+		return true
+	}
+	return false
+}
+
+func (s *Server) downloadDelay(id string) time.Duration {
+	s.dlMu.Lock()
+	defer s.dlMu.Unlock()
+	return s.dlDelay[id]
 }
 
 // failDownloadStatus returns the status downloads of p must fail with, or 0.
@@ -483,6 +546,7 @@ func (s *Server) putContent(parentID, name string, content []byte, mtime time.Ti
 
 func (s *Server) setContent(n *node, content []byte, mtime time.Time) {
 	n.data = append([]byte(nil), content...)
+	n.hash = ""
 	s.bump(n, true)
 	if !mtime.IsZero() {
 		n.mtime = mtime.UTC()
@@ -570,4 +634,13 @@ func (s *Server) size(n *node) int64 {
 func quickXor(data []byte) string {
 	sum := quickxorhash.Sum(data)
 	return base64.StdEncoding.EncodeToString(sum[:])
+}
+
+// quickXor returns the (cached) QuickXorHash of a node's content. The
+// caller holds the server lock.
+func (n *node) quickXor() string {
+	if n.hash == "" {
+		n.hash = quickXor(n.data)
+	}
+	return n.hash
 }
