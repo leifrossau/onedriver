@@ -1,4 +1,4 @@
-.PHONY: all, test, test-init, srpm, rpm, dsc, changes, deb, clean, install, uninstall
+.PHONY: all, test, test-race, test-live, test-init, srpm, rpm, dsc, changes, deb, clean, install, uninstall
 
 # autocalculate software/package versions
 VERSION := $(shell grep Version onedriver.spec | sed 's/Version: *//g')
@@ -126,18 +126,32 @@ test-init: onedriver
 	$< -a mount/	
 
 
-# For offline tests, the test binary is built online, then network access is
-# disabled and tests are run. sudo is required - otherwise we don't have
-# permission to deny network access to onedriver during the test.
-test: onedriver onedriver-launcher dmel.fa
+# Runs the test suite against an in-memory mock of Microsoft Graph. This needs
+# no OneDrive account and no network access, only FUSE (fusermount3) and bash,
+# and is what CI runs. Tests that can only work against the real service are
+# skipped. See "Running tests" in the README.
+test:
+	$(CGO_CFLAGS) go test -count=1 -timeout 300s ./fs/...
+
+
+# Same as "make test", but with the race detector enabled.
+test-race:
+	$(CGO_CFLAGS) $(GORACE) go test -race -count=1 -timeout 600s ./fs/...
+
+
+# Runs the full suite against a real OneDrive account (set up with "make
+# test-init" first). For offline tests, the test binary is built online, then
+# network access is disabled and tests are run. sudo is required - otherwise we
+# don't have permission to deny network access to onedriver during the test.
+test-live: onedriver onedriver-launcher dmel.fa
 	rm -f *.race* fusefs_tests.log
-	CGO_ENABLED=0 gotest -v -parallel=8 -count=1 $(shell go list ./ui/... | grep -v offline)
-	$(CGO_CFLAGS) gotest -v -parallel=8 -count=1 ./cmd/...
-	$(CGO_CFLAGS) $(GORACE) gotest -race -v -parallel=8 -count=1 ./fs/graph/...
-	$(CGO_CFLAGS) $(GORACE) gotest -race -v -parallel=8 -count=1 ./fs
+	CGO_ENABLED=0 ONEDRIVER_TEST_LIVE=1 gotest -v -parallel=8 -count=1 $(shell go list ./ui/... | grep -v offline)
+	$(CGO_CFLAGS) ONEDRIVER_TEST_LIVE=1 gotest -v -parallel=8 -count=1 ./cmd/...
+	$(CGO_CFLAGS) $(GORACE) ONEDRIVER_TEST_LIVE=1 gotest -race -v -parallel=8 -count=1 ./fs/graph/...
+	$(CGO_CFLAGS) $(GORACE) ONEDRIVER_TEST_LIVE=1 gotest -race -v -parallel=8 -count=1 ./fs
 	$(CGO_CFLAGS) go test -c ./fs/offline
 	@echo "sudo is required to run tests of offline functionality:"
-	sudo unshare -n sudo -u $(TEST_UID) ./offline.test -test.v -test.parallel=8 -test.count=1
+	sudo unshare -n sudo -u $(TEST_UID) env ONEDRIVER_TEST_LIVE=1 ./offline.test -test.v -test.parallel=8 -test.count=1
 
 
 # will literally purge everything: all built artifacts, all logs, all tests,

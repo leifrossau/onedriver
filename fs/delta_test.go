@@ -30,6 +30,22 @@ func (i *Inode) setContent(f *Filesystem, newContent []byte) {
 	i.DriveItem.File.Hashes.QuickXorHash = graph.QuickXORHash(&newContent)
 }
 
+// waitForRemoteID blocks until the upload of the file at path has completed and
+// the filesystem has swapped the file's local ID for the server's ID.
+//
+// BUG: if another device renames the file between its upload landing on the
+// server and the upload manager noticing completion (up to one upload tick),
+// applyDelta creates a second inode from the delta and the later
+// MoveID(local -> remote) clobbers it, leaving the file under its old name
+// locally. Tests that rename server-side must therefore wait for this first.
+func waitForRemoteID(t *testing.T, path string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		inode, err := fs.GetPath(path, auth)
+		return err == nil && inode != nil && !isLocalID(inode.ID())
+	}, retrySeconds, 200*time.Millisecond, "upload of %s never completed", path)
+}
+
 // In this test, we create a directory through the API, and wait to see if
 // the cache picks it up post-creation.
 func TestDeltaMkdir(t *testing.T) {
@@ -83,6 +99,7 @@ func TestDeltaRename(t *testing.T) {
 		0644,
 	))
 
+	waitForRemoteID(t, "/onedriver_tests/delta/delta_rename_start")
 	var item *graph.DriveItem
 	var err error
 	require.Eventually(t, func() bool {
@@ -112,7 +129,7 @@ func TestDeltaMoveParent(t *testing.T) {
 		[]byte("carrotcake"),
 		0644,
 	))
-	time.Sleep(time.Second)
+	waitForRemoteID(t, "/onedriver_tests/delta/delta_move_start")
 
 	var item *graph.DriveItem
 	var err error
@@ -146,11 +163,16 @@ func TestDeltaContentChangeRemote(t *testing.T) {
 		0644,
 	))
 
-	// change and upload it via the API
-	time.Sleep(time.Second * 10)
-	item, err := graph.GetItemPath("/onedriver_tests/delta/remote_content", auth)
+	// wait for the local write to be uploaded, then change and upload it via
+	// the API
+	original := []byte("the cake is a lie")
+	var item *graph.DriveItem
+	var err error
+	require.Eventually(t, func() bool {
+		item, err = graph.GetItemPath("/onedriver_tests/delta/remote_content", auth)
+		return err == nil && item.VerifyChecksum(graph.QuickXORHash(&original))
+	}, retrySeconds, time.Second, "initial upload never reached the server")
 	inode := NewInodeDriveItem(item)
-	require.NoError(t, err)
 	newContent := []byte("because it has been changed remotely!")
 	inode.setContent(fs, newContent)
 	data := fs.content.Get(inode.ID())

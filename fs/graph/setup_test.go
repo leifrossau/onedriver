@@ -11,6 +11,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// mock is the fake Graph server, nil when running against a live account.
+var mock *mockgraph.Server
+
 // By default tests run against an in-memory mock of Microsoft Graph (see
 // package mockgraph). Set ONEDRIVER_TEST_LIVE=1 to use a real account instead.
 func TestMain(m *testing.M) {
@@ -22,6 +25,7 @@ func runTests(m *testing.M) int {
 		os.Chdir("../..")
 	} else {
 		srv := mockgraph.New()
+		mock = srv
 		defer srv.Close()
 		GraphURL = srv.GraphURL()
 
