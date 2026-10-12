@@ -64,7 +64,7 @@ func mountMockAuth(t *testing.T, cacheDir string, auth *graph.Auth, deltaLoop bo
 	mnt, err := os.MkdirTemp("", "onedriver-e2e-mount-")
 	require.NoError(t, err)
 	cache := NewFilesystem(auth, cacheDir)
-	server, err := fuse.NewServer(cache, mnt, &fuse.MountOptions{
+	server, err := mountFuse(cache, mnt, &fuse.MountOptions{
 		Name:          "onedriver",
 		FsName:        "onedriver",
 		MaxBackground: 1024,
@@ -85,9 +85,7 @@ func mountMockAuth(t *testing.T, cacheDir string, auth *graph.Auth, deltaLoop bo
 	var once sync.Once
 	return mnt, cache, func() {
 		once.Do(func() {
-			if server.Unmount() != nil {
-				runErr("fusermount3", "-zu", mnt)
-			}
+			unmountFuse(server, mnt)
 			cache.Stop()
 			os.Remove(mnt)
 		})

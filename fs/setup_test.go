@@ -132,7 +132,7 @@ func TestMain(m *testing.M) {
 		auth = newMockAuth(mock)
 	}
 	fs = NewFilesystem(auth, filepath.Join(testDBLoc, "test"))
-	server, _ := fuse.NewServer(
+	server, merr := mountFuse(
 		fs,
 		mountLoc,
 		&fuse.MountOptions{
@@ -142,11 +142,19 @@ func TestMain(m *testing.M) {
 			MaxBackground: 1024,
 		},
 	)
+	if merr != nil {
+		fmt.Println("mount failed:", merr)
+		os.Exit(1)
+	}
 
 	// setup sigint handler for graceful unmount on interrupt/terminate
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGABRT)
-	go UnmountHandler(sigChan, server)
+	go func() {
+		<-sigChan
+		unmountFuse(server, mountLoc)
+		os.Exit(1)
+	}()
 
 	// mount fs in background thread
 	go server.Serve()
@@ -192,9 +200,8 @@ func TestMain(m *testing.M) {
 	fmt.Printf("\n")
 
 	// unmount
-	if server.Unmount() != nil {
-		log.Error().Msg("Failed to unmount test fuse server, attempting lazy unmount")
-		runErr("fusermount3", "-zu", "mount")
+	if unmountFuse(server, mountLoc) != nil {
+		log.Error().Msg("Failed to unmount test fuse server, attempted lazy unmount")
 	}
 	fmt.Println("Successfully unmounted fuse server!")
 	stopRunner()

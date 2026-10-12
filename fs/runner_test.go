@@ -21,9 +21,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
+
+	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
 const runnerEnv = "ONEDRIVER_TEST_RUNNER"
@@ -49,6 +54,7 @@ type runnerResponse struct {
 
 // runnerMain is the helper process: it serves requests from stdin until EOF.
 func runnerMain() {
+	fdSock = os.NewFile(3, "fdsock")
 	var wmu sync.Mutex
 	out := json.NewEncoder(os.Stdout)
 	send := func(r runnerResponse) {
@@ -103,6 +109,10 @@ func runnerMain() {
 			daemons[resp.Pid] = cmd
 			dmu.Unlock()
 			go io.Copy(io.Discard, pipe)
+		case "mount":
+			if err := runnerMount(req); err != nil {
+				resp.ExitCode, resp.Err = -1, err.Error()
+			}
 		case "kill":
 			dmu.Lock()
 			cmd := daemons[req.Pid]
@@ -141,6 +151,7 @@ type runnerClient struct {
 	mu      sync.Mutex
 	nextID  int64
 	pending map[int64]chan runnerResponse
+	fds     map[int64]chan int
 }
 
 var runner *runnerClient
@@ -151,6 +162,13 @@ func startRunner() error {
 	cmd := exec.Command(os.Args[0])
 	cmd.Env = append(os.Environ(), runnerEnv+"=1")
 	cmd.Stderr = os.Stderr
+	pair, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_SEQPACKET|syscall.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	mine := os.NewFile(uintptr(pair[0]), "fdsock-local")
+	theirs := os.NewFile(uintptr(pair[1]), "fdsock-runner")
+	cmd.ExtraFiles = []*os.File{theirs}
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -162,7 +180,10 @@ func startRunner() error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	r := &runnerClient{cmd: cmd, stdin: in, enc: json.NewEncoder(in), pending: map[int64]chan runnerResponse{}}
+	theirs.Close()
+	r := &runnerClient{cmd: cmd, stdin: in, enc: json.NewEncoder(in),
+		pending: map[int64]chan runnerResponse{}, fds: map[int64]chan int{}}
+	go r.receiveFds(mine)
 	go func() {
 		dec := json.NewDecoder(bufio.NewReader(outPipe))
 		for {
@@ -199,11 +220,21 @@ func stopRunner() {
 	runner = nil
 }
 
+func (r *runnerClient) nextRequestID() int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.nextID++
+	return r.nextID
+}
+
 func (r *runnerClient) do(req runnerRequest) runnerResponse {
+	return r.doID(r.nextRequestID(), req)
+}
+
+func (r *runnerClient) doID(id int64, req runnerRequest) runnerResponse {
 	ch := make(chan runnerResponse, 1)
 	r.mu.Lock()
-	r.nextID++
-	req.ID = r.nextID
+	req.ID = id
 	r.pending[req.ID] = ch
 	r.mu.Unlock()
 	r.wmu.Lock()
@@ -270,4 +301,172 @@ func startDaemon(name string, args ...string) (firstLine string, stop func(), er
 	}
 	pid := resp.Pid
 	return string(resp.Stdout), func() { runner.do(runnerRequest{Op: "kill", Pid: pid}) }, nil
+}
+
+// fdSock is the runner's end of the socket used to hand /dev/fuse descriptors
+// to the test process.
+var (
+	fdSock *os.File
+	fdMu   sync.Mutex
+)
+
+// runnerMount mounts a FUSE filesystem the way go-fuse does (fusermount3 with
+// _FUSE_COMMFD) and passes the resulting /dev/fuse descriptor to the test
+// process over fdSock, tagged with the request ID. This way the test process
+// never has to fork while it serves other mounts.
+func runnerMount(req runnerRequest) error {
+	pair, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_DGRAM|syscall.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	local := os.NewFile(uintptr(pair[0]), "local")
+	remote := os.NewFile(uintptr(pair[1]), "remote")
+	defer local.Close()
+	defer remote.Close()
+
+	cmd := exec.Command("fusermount3", append([]string{req.Name}, req.Args...)...)
+	cmd.Env = []string{"_FUSE_COMMFD=3"}
+	cmd.ExtraFiles = []*os.File{remote}
+	var se bytes.Buffer
+	cmd.Stderr = &se
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("fusermount3: %v: %s", err, se.String())
+	}
+	buf := make([]byte, 4)
+	oob := make([]byte, syscall.CmsgSpace(4))
+	_, oobn, _, _, err := syscall.Recvmsg(pair[0], buf, oob, 0)
+	if err != nil {
+		return err
+	}
+	msgs, err := syscall.ParseSocketControlMessage(oob[:oobn])
+	if err != nil || len(msgs) == 0 {
+		return fmt.Errorf("no control message from fusermount3: %v", err)
+	}
+	fds, err := syscall.ParseUnixRights(&msgs[0])
+	if err != nil || len(fds) != 1 {
+		return fmt.Errorf("no fd from fusermount3: %v", err)
+	}
+	defer syscall.Close(fds[0])
+
+	id := make([]byte, 8)
+	for i := 0; i < 8; i++ {
+		id[i] = byte(req.ID >> (8 * i))
+	}
+	fdMu.Lock()
+	defer fdMu.Unlock()
+	return syscall.Sendmsg(int(fdSock.Fd()), id, syscall.UnixRights(fds[0]), nil, 0)
+}
+
+// receiveFds reads descriptors sent by runnerMount.
+func (r *runnerClient) receiveFds(sock *os.File) {
+	for {
+		buf := make([]byte, 8)
+		oob := make([]byte, syscall.CmsgSpace(4))
+		n, oobn, _, _, err := syscall.Recvmsg(int(sock.Fd()), buf, oob, 0)
+		if err != nil {
+			if err == syscall.EINTR {
+				continue
+			}
+			return
+		}
+		if n != 8 {
+			continue
+		}
+		var id int64
+		for i := 0; i < 8; i++ {
+			id |= int64(buf[i]) << (8 * i)
+		}
+		fd := -1
+		if msgs, err := syscall.ParseSocketControlMessage(oob[:oobn]); err == nil && len(msgs) > 0 {
+			if fds, err := syscall.ParseUnixRights(&msgs[0]); err == nil && len(fds) == 1 {
+				fd = fds[0]
+			}
+		}
+		r.fdChan(id) <- fd
+	}
+}
+
+func (r *runnerClient) fdChan(id int64) chan int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ch := r.fds[id]
+	if ch == nil {
+		ch = make(chan int, 1)
+		r.fds[id] = ch
+	}
+	return ch
+}
+
+// mountFuse mounts fsys at mnt like fuse.NewServer does, except that
+// fusermount3 is run by the helper process: forking in this process while
+// other mounts served by it have open files can deadlock (see top of file).
+// Unmount with unmountFuse.
+func mountFuse(fsys fuse.RawFileSystem, mnt string, opts *fuse.MountOptions) (*fuse.Server, error) {
+	if runner == nil {
+		return nil, errors.New("test runner not started")
+	}
+	abs, err := filepath.Abs(mnt)
+	if err != nil {
+		return nil, err
+	}
+	o := *opts
+	if o.MaxWrite <= 0 {
+		o.MaxWrite = 128 * 1024
+	}
+	var optStrs []string
+	if o.FsName != "" {
+		optStrs = append(optStrs, "fsname="+o.FsName)
+	}
+	if o.Name != "" {
+		optStrs = append(optStrs, "subtype="+o.Name)
+	}
+	optStrs = append(optStrs, fmt.Sprintf("max_read=%d", o.MaxWrite))
+
+	id := runner.nextRequestID()
+	ch := runner.fdChan(id)
+	resp := runner.doID(id, runnerRequest{Op: "mount", Name: abs, Args: []string{"-o", strings.Join(optStrs, ",")}})
+	if resp.Err != "" {
+		return nil, errors.New(resp.Err)
+	}
+	var fd int
+	select {
+	case fd = <-ch:
+	case <-time.After(30 * time.Second):
+		return nil, errors.New("timeout waiting for /dev/fuse descriptor from runner")
+	}
+	runner.mu.Lock()
+	delete(runner.fds, id)
+	runner.mu.Unlock()
+	if fd < 0 {
+		return nil, errors.New("runner sent no descriptor")
+	}
+	srv, err := fuse.NewServer(fsys, fmt.Sprintf("/dev/fd/%d", fd), &o)
+	if err != nil {
+		syscall.Close(fd)
+		runErr("fusermount3", "-uz", abs)
+		return nil, err
+	}
+	return srv, nil
+}
+
+// unmountFuse unmounts a filesystem mounted with mountFuse, falling back to a
+// lazy unmount. It waits for the server loop to finish.
+func unmountFuse(srv *fuse.Server, mnt string) error {
+	abs, err := filepath.Abs(mnt)
+	if err != nil {
+		abs = mnt
+	}
+	delay := time.Duration(0)
+	for try := 0; try < 5; try++ {
+		if err = runErr("fusermount3", "-u", abs); err == nil {
+			break
+		}
+		delay = 2*delay + 5*time.Millisecond
+		time.Sleep(delay)
+	}
+	if err != nil {
+		runErr("fusermount3", "-uz", abs)
+	}
+	srv.Wait()
+	return err
 }
