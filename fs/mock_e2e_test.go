@@ -243,20 +243,11 @@ func TestDeltaRenameWhileUploadCompletes(t *testing.T) {
 	}
 }
 
-// BUG: UploadManager.inFlight leaks a slot every time an errored upload is
-// retried (upload_manager.go: inFlight++ whenever a NotStarted session is
-// started, including after uploadErrored resets it, but only finishUpload
-// decrements). The same happens whenever a started session is replaced by a
-// newer one for the same item. After maxUploadsInFlight leaks the manager
-// silently stops starting any upload, so one file whose upload keeps failing
-// stalls the whole mount.
-//
-// Skipped by default; run with ONEDRIVER_TEST_KNOWN_BUGS=1 to see it fail.
+// Regression test: UploadManager.inFlight used to leak a slot every time an
+// errored upload was retried, so after maxUploadsInFlight retries the manager
+// silently stopped starting any upload and one failing file stalled the mount.
 func TestUploadManagerInFlightLeak(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("ONEDRIVER_TEST_KNOWN_BUGS") != "1" {
-		t.Skip("known bug (see comment), run with ONEDRIVER_TEST_KNOWN_BUGS=1")
-	}
 	const remoteDir = "/e2e_inflight"
 	dir := mountMock(t, remoteDir)
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -136,4 +137,55 @@ func TestUploadSessionLargeFS(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, graph.QuickXORHash(&contents), graph.QuickXORHash(&downloaded),
 		"Downloaded content did not match original content.")
+}
+
+// TestUploadSessionLargeUsesFinalResponse checks that a large (chunked) upload
+// uses the final chunk's response instead of refetching the item, and that
+// cancelling a started session sends an unauthenticated DELETE to the
+// (absolute) upload URL.
+func TestUploadSessionLargeUsesFinalResponse(t *testing.T) {
+	t.Parallel()
+	if mock == nil {
+		t.Skip("requires the mock Graph server")
+	}
+	testDir, err := fs.GetPath("/onedriver_tests", auth)
+	require.NoError(t, err)
+
+	inode := NewInode("uploadSessionLarge.bin", 0644, testDir)
+	data := bytes.Repeat([]byte("0123456789abcdef"), int(uploadLargeSize)/16+1024)
+	inode.setContent(fs, data)
+
+	before := len(mock.Requests())
+	session, err := NewUploadSession(inode, &data)
+	require.NoError(t, err)
+	require.NoError(t, session.Upload(auth))
+	require.Equal(t, uploadComplete, session.getState())
+	assert.False(t, isLocalID(session.ID))
+	assert.NotEmpty(t, session.ETag)
+
+	// a refetch of the item would show up as a GET after the chunk PUT
+	var sawPut bool
+	for _, r := range mock.Requests()[before:] {
+		if strings.HasPrefix(r, "PUT /upload/") {
+			sawPut = true
+		} else if sawPut && strings.HasPrefix(r, "GET ") && !strings.Contains(r, "/delta") {
+			t.Errorf("item was refetched after the final chunk: %s", r)
+		}
+	}
+	assert.True(t, sawPut, "no chunk upload seen")
+
+	// cancel must reach the server
+	session2, err := NewUploadSession(inode, &data)
+	require.NoError(t, err)
+	session2.UploadURL = mock.HTTP.URL + "/upload/does-not-matter"
+	session2.setState(uploadStarted, nil)
+	session2.cancel(auth)
+	assert.Eventually(t, func() bool {
+		for _, r := range mock.Requests() {
+			if r == "DELETE /upload/does-not-matter" {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 20*time.Millisecond, "cancel never hit the upload URL")
 }
