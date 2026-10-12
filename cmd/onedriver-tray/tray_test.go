@@ -311,12 +311,19 @@ func TestNotifyBecomesNotification(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("no auth notification")
 	}
-	// clicking "Log in" runs the launcher
-	require.NoError(t, e.client.Emit("/org/freedesktop/Notifications", notifDst+".ActionInvoked", uint32(7), "login"))
-	select {
-	case r := <-e.ran:
-		assert.Equal(t, []string{"onedriver-launcher"}, r)
-	case <-time.After(3 * time.Second):
-		t.Fatal("launcher not started")
+	// clicking "Log in" runs the launcher. The fake service reports the
+	// notification before the tray has stored its reply id, so keep clicking
+	// until the tray knows about it (a real user clicks much later).
+	deadline := time.After(3 * time.Second)
+	for {
+		require.NoError(t, e.client.Emit("/org/freedesktop/Notifications", notifDst+".ActionInvoked", uint32(7), "login"))
+		select {
+		case r := <-e.ran:
+			assert.Equal(t, []string{"onedriver-launcher"}, r)
+			return
+		case <-time.After(100 * time.Millisecond):
+		case <-deadline:
+			t.Fatal("launcher not started")
+		}
 	}
 }
