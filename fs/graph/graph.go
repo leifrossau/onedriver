@@ -23,8 +23,8 @@ import (
 var GraphURL = "https://graph.microsoft.com/v1.0"
 
 func init() {
-	if url := os.Getenv("ONEDRIVER_GRAPH_URL"); url != "" {
-		GraphURL = url
+	if u := os.Getenv("ONEDRIVER_GRAPH_URL"); u != "" {
+		GraphURL = u
 	}
 }
 
