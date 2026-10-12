@@ -1,6 +1,5 @@
 {
     "KPlugin": {
-        "Id": "onedriveroverlay",
         "Name": "OneDrive file state",
         "Description": "Shows the OneDrive state (online only, always available, syncing, error) of files in onedriver mounts",
         "Icon": "folder-cloud",

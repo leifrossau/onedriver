@@ -26,9 +26,13 @@ private Q_SLOTS:
 
 private:
     void addService(const QString &busName);
+    void addMount(const QString &busName, QString mountPoint);
     void removeService(const QString &busName);
 
     QHash<QString, QObject *> m_watchers; // bus name -> MountWatcher
     QHash<QString, QString> m_mounts; // bus name -> mountpoint
     QStringList m_mountList;
+    // local paths asked about while no mount matched them (e.g. Dolphin was
+    // started before onedriver); refreshed when a mount appears
+    QList<QString> m_unmatched;
 };

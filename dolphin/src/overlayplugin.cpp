@@ -9,6 +9,7 @@
 #include <QDBusMessage>
 #include <QDBusPendingCallWatcher>
 #include <QDBusPendingReply>
+#include <QDBusReply>
 #include <QDBusVariant>
 #include <QFileInfo>
 #include <QUrl>
@@ -60,17 +61,25 @@ OneDriverOverlayPlugin::OneDriverOverlayPlugin(QObject *parent)
                 this,
                 SLOT(onNameOwnerChanged(QString, QString, QString)));
 
-    // asynchronous: never block the file manager at startup
-    auto *w = new QDBusPendingCallWatcher(bus.interface()->asyncCall(QStringLiteral("ListNames")), this);
-    connect(w, &QDBusPendingCallWatcher::finished, this, [this](QDBusPendingCallWatcher *self) {
-        QDBusPendingReply<QStringList> reply = *self;
-        self->deleteLater();
-        const QStringList names = reply.value();
-        for (const QString &n : names) {
-            if (isMountBusName(n))
-                addService(n);
-        }
-    });
+    // The first lookup is synchronous (with short timeouts): Dolphin asks for
+    // the overlays of a folder right after loading the plugin, and an answer
+    // given before the mounts are known would never be corrected. Later
+    // changes (onedriver starting or stopping) are handled asynchronously.
+    const QDBusReply<QStringList> names = bus.interface()->registeredServiceNames();
+    if (!names.isValid())
+        return;
+    for (const QString &n : names.value()) {
+        if (!isMountBusName(n))
+            continue;
+        QDBusMessage msg = QDBusMessage::createMethodCall(n,
+                                                          QString::fromLatin1(kObjectPath),
+                                                          QStringLiteral("org.freedesktop.DBus.Properties"),
+                                                          QStringLiteral("Get"));
+        msg << QString::fromLatin1(kInterface) << QStringLiteral("MountPoint");
+        const QDBusReply<QDBusVariant> reply = bus.call(msg, QDBus::Block, 300);
+        if (reply.isValid())
+            addMount(n, reply.value().variant().toString());
+    }
 }
 
 void OneDriverOverlayPlugin::addService(const QString &busName)
@@ -88,18 +97,34 @@ void OneDriverOverlayPlugin::addService(const QString &busName)
         self->deleteLater();
         if (reply.isError())
             return;
-        QString mp = reply.value().variant().toString();
-        while (mp.size() > 1 && mp.endsWith(QLatin1Char('/')))
-            mp.chop(1);
-        if (mp.isEmpty())
-            return;
-        // resolve symlinks once so it matches the canonical paths KIO hands us
-        const QString canon = QFileInfo(mp).canonicalFilePath();
-        const QString mount = canon.isEmpty() ? mp : canon;
-        m_mounts.insert(busName, mount);
-        m_mountList = m_mounts.values();
-        m_watchers.insert(busName, new MountWatcher(this, busName, mount));
+        addMount(busName, reply.value().variant().toString());
     });
+}
+
+void OneDriverOverlayPlugin::addMount(const QString &busName, QString mp)
+{
+    while (mp.size() > 1 && mp.endsWith(QLatin1Char('/')))
+        mp.chop(1);
+    if (mp.isEmpty() || m_mounts.contains(busName))
+        return;
+    // resolve symlinks once so it matches the canonical paths KIO hands us
+    const QString canon = QFileInfo(mp).canonicalFilePath();
+    const QString mount = canon.isEmpty() ? mp : canon;
+    m_mounts.insert(busName, mount);
+    m_mountList = m_mounts.values();
+    m_watchers.insert(busName, new MountWatcher(this, busName, mount));
+
+    // items Dolphin asked about before this mount was known
+    QList<QString> rest;
+    for (const QString &path : std::as_const(m_unmatched)) {
+        if (mountForPath(path, {mount}).isEmpty()) {
+            rest.append(path);
+            continue;
+        }
+        const QUrl url = QUrl::fromLocalFile(path);
+        Q_EMIT overlaysChanged(url, getOverlays(url));
+    }
+    m_unmatched = rest;
 }
 
 void OneDriverOverlayPlugin::removeService(const QString &busName)
@@ -121,11 +146,18 @@ void OneDriverOverlayPlugin::onNameOwnerChanged(const QString &name, const QStri
 
 QStringList OneDriverOverlayPlugin::getOverlays(const QUrl &item)
 {
-    if (m_mountList.isEmpty() || !item.isLocalFile())
+    if (!item.isLocalFile())
         return {};
     const QString path = item.toLocalFile();
-    const QString mount = mountForPath(path, m_mountList);
-    if (mount.isEmpty() || path == mount)
+    const QString mount = m_mountList.isEmpty() ? QString() : mountForPath(path, m_mountList);
+    if (mount.isEmpty()) {
+        // remember a bounded number of recent paths in case a mount appears
+        m_unmatched.append(path);
+        if (m_unmatched.size() > 2000)
+            m_unmatched.remove(0, m_unmatched.size() - 2000);
+        return {};
+    }
+    if (path == mount)
         return {};
     // the xattr call is a single cheap FUSE request, no D-Bus per file
     const FileState st = readFileState(path);
