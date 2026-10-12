@@ -48,6 +48,13 @@ func mountMockFS(t *testing.T, remoteDir string) (string, *Filesystem) {
 // Filesystem and a function that unmounts and stops it (safe to call twice).
 func mountMockAt(t *testing.T, cacheDir string) (string, *Filesystem, func()) {
 	t.Helper()
+	return mountMockAtOpts(t, cacheDir, true)
+}
+
+// mountMockAtOpts is mountMockAt, optionally without the delta loop (so the
+// test controls the filesystem's offline flag).
+func mountMockAtOpts(t *testing.T, cacheDir string, deltaLoop bool) (string, *Filesystem, func()) {
+	t.Helper()
 	mnt, err := os.MkdirTemp("", "onedriver-e2e-mount-")
 	require.NoError(t, err)
 	cache := NewFilesystem(auth, cacheDir)
@@ -65,7 +72,9 @@ func mountMockAt(t *testing.T, cacheDir string) (string, *Filesystem, func()) {
 	// be skipped).
 	_, _, err = cache.pollDeltas(auth)
 	require.NoError(t, err)
-	go cache.DeltaLoop(500 * time.Millisecond)
+	if deltaLoop {
+		go cache.DeltaLoop(500 * time.Millisecond)
+	}
 
 	var once sync.Once
 	return mnt, cache, func() {
