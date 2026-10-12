@@ -141,9 +141,12 @@ func getAuthURL(a AuthConfig) string {
 // getAuthCodeHeadless has the user perform authentication in their own browser
 // instead of WebKit2GTK and then input the auth code in the terminal.
 func getAuthCodeHeadless(a AuthConfig, accountName string) string {
-	fmt.Printf("Please visit the following URL:\n%s\n\n", getAuthURL(a))
-	fmt.Println("Please enter the redirect URL once you are redirected to a " +
-		"blank page (after \"Let this app access your info?\"):")
+	fmt.Printf("Please open the following URL in your normal web browser and sign in:\n%s\n\n",
+		getAuthURL(a))
+	fmt.Println("After you accept \"Let this app access your info?\", your browser will " +
+		"show a blank page whose address starts with\n" +
+		"https://login.live.com/oauth20_desktop.srf?code=...\n" +
+		"Copy that ENTIRE address from the address bar, paste it here and press Enter:")
 	var response string
 	fmt.Scanln(&response)
 	code, err := parseAuthCode(response)
