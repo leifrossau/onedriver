@@ -12,6 +12,9 @@ import (
 
 const maxUploadsInFlight = 5
 
+// number of content hashes remembered per item for conflict detection
+const maxUploadHashes = 10
+
 var bucketUploads = []byte("uploads")
 
 // UploadManager is used to manage and retry uploads.
@@ -19,11 +22,18 @@ type UploadManager struct {
 	queue         chan *UploadSession
 	deletionQueue chan string
 	sessions      map[string]*UploadSession
-	sessionsMu    sync.RWMutex // guards writes to sessions (and reads from other goroutines)
-	inFlight      uint8        // number of sessions in flight
+	inFlight      uint8 // number of sessions in flight
 	auth          *graph.Auth
 	fs            *Filesystem
 	db            *bolt.DB
+
+	// sessionsM guards writes to sessions (which only happen on the
+	// uploadLoop goroutine) against reads from other goroutines (the delta
+	// loop), as well as reserved and hashes. It is never held while acquiring
+	// an inode lock.
+	sessionsM sync.RWMutex
+	reserved  map[string]int      // uploads queued but not yet received by uploadLoop
+	hashes    map[string][]string // recent content hashes we have uploaded, by ID
 }
 
 // NewUploadManager creates a new queue/thread for uploads
@@ -32,6 +42,8 @@ func NewUploadManager(duration time.Duration, db *bolt.DB, fs *Filesystem, auth 
 		queue:         make(chan *UploadSession),
 		deletionQueue: make(chan string, 1000), // FIXME - why does this chan need to be buffered now???
 		sessions:      make(map[string]*UploadSession),
+		reserved:      make(map[string]int),
+		hashes:        make(map[string][]string),
 		auth:          auth,
 		db:            db,
 		fs:            fs,
@@ -56,9 +68,8 @@ func NewUploadManager(duration time.Duration, db *bolt.DB, fs *Filesystem, auth 
 				manager.inFlight++
 			}
 			session.cancel(auth) // uploads are currently non-resumable
-			manager.sessionsMu.Lock()
 			manager.sessions[session.ID] = session
-			manager.sessionsMu.Unlock()
+			manager.recordHashLocked(session.ID, session.QuickXORHash)
 			return nil
 		})
 	})
@@ -83,9 +94,13 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 				b, _ := tx.CreateBucketIfNotExists(bucketUploads)
 				return b.Put([]byte(session.ID), contents)
 			})
-			u.sessionsMu.Lock()
+			// swap the reservation for the real session atomically so the
+			// delta loop never sees this upload as "not pending"
+			u.sessionsM.Lock()
 			u.sessions[session.ID] = session
-			u.sessionsMu.Unlock()
+			u.releaseLocked(session.reservedID)
+			u.recordHashLocked(session.ID, session.QuickXORHash)
+			u.sessionsM.Unlock()
 
 		case cancelID := <-u.deletionQueue: // remove uploads for deleted items
 			u.finishUpload(cancelID)
@@ -131,6 +146,7 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 
 					// ID changed during upload, move to new ID
 					if session.OldID != session.ID {
+						u.recordHash(session.ID, session.QuickXORHash)
 						err := u.fs.MoveID(session.OldID, session.ID)
 						if err != nil {
 							log.Error().
@@ -161,12 +177,98 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 
 // QueueUpload queues an item for upload.
 func (u *UploadManager) QueueUpload(inode *Inode) error {
+	id := inode.ID()
+	u.reserveUpload(id)
+	return u.queueReservedUpload(inode, id)
+}
+
+// reserveUpload marks an upload for an ID as pending before the session is
+// actually created. Callers that clear an inode's hasChanges flag must reserve
+// first, so that hasChanges and IsUploadPending never both report false while
+// local content is still waiting to be uploaded. Must be paired with
+// queueReservedUpload.
+func (u *UploadManager) reserveUpload(id string) {
+	u.sessionsM.Lock()
+	u.reserved[id]++
+	u.sessionsM.Unlock()
+}
+
+// queueReservedUpload queues an upload previously reserved under reservedID.
+func (u *UploadManager) queueReservedUpload(inode *Inode, reservedID string) error {
 	data := u.fs.getInodeContent(inode)
 	session, err := NewUploadSession(inode, data)
-	if err == nil {
-		u.queue <- session
+	if err != nil {
+		u.sessionsM.Lock()
+		u.releaseLocked(reservedID)
+		u.sessionsM.Unlock()
+		return err
 	}
-	return err
+	session.reservedID = reservedID
+	u.queue <- session
+	return nil
+}
+
+// releaseLocked drops a reservation. sessionsM must be held.
+func (u *UploadManager) releaseLocked(id string) {
+	if u.reserved[id] <= 1 {
+		delete(u.reserved, id)
+	} else {
+		u.reserved[id]--
+	}
+}
+
+// recordHash remembers that we uploaded content with this hash for an ID.
+func (u *UploadManager) recordHash(id string, hash string) {
+	u.sessionsM.Lock()
+	u.recordHashLocked(id, hash)
+	u.sessionsM.Unlock()
+}
+
+// recordHashLocked is recordHash, but sessionsM must be held.
+func (u *UploadManager) recordHashLocked(id string, hash string) {
+	if hash == "" {
+		return
+	}
+	hashes := u.hashes[id]
+	for _, h := range hashes {
+		if h == hash {
+			return
+		}
+	}
+	hashes = append(hashes, hash)
+	if len(hashes) > maxUploadHashes {
+		hashes = hashes[len(hashes)-maxUploadHashes:]
+	}
+	u.hashes[id] = hashes
+}
+
+// IsUploadPending returns true if an upload for any of the given IDs is
+// queued, in progress, or waiting to be retried. Safe to call from any
+// goroutine.
+func (u *UploadManager) IsUploadPending(ids ...string) bool {
+	u.sessionsM.RLock()
+	defer u.sessionsM.RUnlock()
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, exists := u.sessions[id]; exists || u.reserved[id] > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// UploadedHashes returns the content hashes this client has recently uploaded
+// for any of the given IDs. Safe to call from any goroutine.
+func (u *UploadManager) UploadedHashes(ids ...string) []string {
+	u.sessionsM.RLock()
+	defer u.sessionsM.RUnlock()
+	out := make([]string, 0)
+	for _, id := range ids {
+		out = append(out, u.hashes[id]...)
+	}
+	return out
 }
 
 // CancelUpload is used to kill any pending uploads for a session
@@ -190,20 +292,21 @@ func (u *UploadManager) finishUpload(id string) {
 	if u.inFlight > 0 {
 		u.inFlight--
 	}
-	u.sessionsMu.Lock()
+	u.sessionsM.Lock()
 	delete(u.sessions, id)
-	u.sessionsMu.Unlock()
+	u.sessionsM.Unlock()
 }
 
 // sessionState returns the state of the upload session for the given ID, and
-// whether such a session exists. It is safe to call from any goroutine and
-// never blocks on the upload loop.
+// whether an upload is pending (a session exists or one has been reserved by
+// Fsync). Safe to call from any goroutine, never blocks on the upload loop.
 func (u *UploadManager) sessionState(id string) (state int, exists bool) {
-	u.sessionsMu.RLock()
+	u.sessionsM.RLock()
 	session, exists := u.sessions[id]
-	u.sessionsMu.RUnlock()
+	reserved := u.reserved[id] > 0
+	u.sessionsM.RUnlock()
 	if !exists {
-		return uploadNotStarted, false
+		return uploadNotStarted, reserved
 	}
 	return session.getState(), true
 }

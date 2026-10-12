@@ -332,6 +332,13 @@ func (f *Filesystem) InsertChild(parentID string, child *Inode) uint64 {
 // DeleteID deletes an item from the cache, and removes it from its parent. Must
 // be called before InsertID if being used to rename/move an item.
 func (f *Filesystem) DeleteID(id string) {
+	f.deleteID(id)
+	f.uploads.CancelUpload(id)
+}
+
+// deleteID removes an item from the cache and its parent without touching
+// any pending uploads for it.
+func (f *Filesystem) deleteID(id string) {
 	if inode := f.GetID(id); inode != nil {
 		parent := f.GetID(inode.ParentID())
 		parent.Lock()
@@ -347,7 +354,6 @@ func (f *Filesystem) DeleteID(id string) {
 		parent.Unlock()
 	}
 	f.metadata.Delete(id)
-	f.uploads.CancelUpload(id)
 }
 
 // GetChild fetches a named child of an item. Wraps GetChildrenID.
@@ -563,7 +569,10 @@ func (f *Filesystem) MovePath(oldParent, newParent, oldName, newName string, aut
 	}
 
 	id := inode.ID()
-	f.DeleteID(id)
+	// The ID does not change, so any pending upload (which targets the item by
+	// ID) stays valid and must not be cancelled - doing so would silently drop
+	// local changes.
+	f.deleteID(id)
 
 	// this is the actual move op
 	inode.SetName(newName)
