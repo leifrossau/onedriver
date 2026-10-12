@@ -203,7 +203,8 @@ func (s *Server) graph(w http.ResponseWriter, r *http.Request, p string) {
 	rest := strings.TrimPrefix(p, "/me/drive/")
 	if r.Method == http.MethodGet && strings.HasSuffix(p, "/content") && !strings.Contains(p, "/thumbnails/") {
 		// without the state lock, so concurrent downloads overlap
-		if d := s.downloadDelay(); d > 0 {
+		id := strings.SplitN(strings.TrimPrefix(rest, "items/"), "/", 2)[0]
+		if d := s.downloadDelay(id); d > 0 {
 			time.Sleep(d)
 		}
 	}
@@ -362,7 +363,9 @@ func (s *Server) serveContent(w http.ResponseWriter, r *http.Request, n *node) {
 	status := 200
 	if rng := r.Header.Get("Range"); strings.HasPrefix(rng, "bytes=") {
 		var start, end int
-		if _, err := fmt.Sscanf(rng, "bytes=%d-%d", &start, &end); err != nil {
+		if n, _ := fmt.Sscanf(rng, "bytes=%d-%d", &start, &end); n == 1 {
+			end = len(data) - 1 // "bytes=a-": to the end
+		} else if n != 2 {
 			start, end = 0, len(data)-1
 		}
 		if start >= len(data) {

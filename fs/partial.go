@@ -68,23 +68,30 @@ func (f *Filesystem) downloadInProgress(id string) chan struct{} {
 // the full download path (a full download is running right now).
 func (f *Filesystem) openLazy(ctx zerolog.Logger, inode *Inode, fd *os.File, remoteHash string) (fuse.Status, bool) {
 	id := inode.ID()
-	if p := f.partialGet(id); p != nil {
-		p.mu.Lock()
-		current := p.hash == strings.ToLower(remoteHash)
-		p.mu.Unlock()
-		if current {
-			return fuse.OK, true
+	for attempt := 0; attempt < 10; attempt++ {
+		if p := f.partialGet(id); p != nil {
+			p.mu.Lock()
+			current := p.hash == strings.ToLower(remoteHash)
+			p.mu.Unlock()
+			if current {
+				return fuse.OK, true
+			}
+		} else if status, done := f.useCachedContent(ctx, inode, fd, remoteHash); done {
+			return status, true
 		}
-	} else if status, done := f.useCachedContent(ctx, inode, fd, remoteHash); done {
-		return status, true
-	}
 
-	unlock, ok := f.tryLockDownload(id)
-	if !ok {
-		return fuse.OK, false
+		unlock, ok := f.tryLockDownload(id)
+		if ok {
+			defer unlock()
+			return f.resetPartial(ctx, inode, remoteHash), true
+		}
+		// somebody else is downloading or preparing the file (a concurrent
+		// Open), wait for them and check again
+		if ch := f.downloadInProgress(id); ch != nil {
+			<-ch
+		}
 	}
-	defer unlock()
-	return f.resetPartial(ctx, inode, remoteHash), true
+	return fuse.OK, false
 }
 
 // resetPartial (re)starts partial caching of an inode's content for the
@@ -252,8 +259,9 @@ func (f *Filesystem) readPartial(ctx zerolog.Logger, inode *Inode, off, size int
 		first := off / partialChunk
 		lastNeed := (end - 1) / partialChunk
 		last := lastNeed
+		raEnd := end
 		if p.readahead > 0 {
-			raEnd := end + p.readahead
+			raEnd = end + p.readahead
 			if raEnd > fileSize {
 				raEnd = fileSize
 			}
@@ -273,12 +281,22 @@ func (f *Filesystem) readPartial(ctx zerolog.Logger, inode *Inode, off, size int
 				}
 				continue
 			}
-			p.inflight[c] = make(chan struct{})
 			if c <= lastNeed {
 				need = append(need, c)
 			} else {
 				ahead = append(ahead, c)
 			}
+		}
+		// Read ahead in large requests: only once at least half of the
+		// window is missing (or the window reaches the end of the file).
+		if int64(len(ahead))*partialChunk < p.readahead/2 && raEnd < fileSize {
+			ahead = nil
+		}
+		for _, c := range need {
+			p.inflight[c] = make(chan struct{})
+		}
+		for _, c := range ahead {
+			p.inflight[c] = make(chan struct{})
 		}
 		gen := p.gen
 		p.mu.Unlock()

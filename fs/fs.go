@@ -603,6 +603,10 @@ func (f *Filesystem) open(cancel <-chan struct{}, in *fuse.OpenIn, out *fuse.Ope
 				return status
 			}
 		}
+		if writing && f.isPartial(id) {
+			// no point hashing a sparse file, just download the rest
+			return f.ensureFull(ctx, inode)
+		}
 
 		if status, done := f.useCachedContent(ctx, inode, fd, remoteHash); done {
 			return status
@@ -858,16 +862,26 @@ func (f *Filesystem) Read(cancel <-chan struct{}, in *fuse.ReadIn, buf []byte) (
 		}
 	}
 
+	// The shared cache fd can be closed by a Flush of another handle (which
+	// takes the inode lock), so it is read here under the lock rather than
+	// handed to go-fuse with ReadResultFd (which reads it after we return).
+	inode.RLock()
+	defer inode.RUnlock()
 	fd, err := f.content.Open(id)
 	if err != nil {
 		ctx.Error().Err(err).Msg("Cache Open() failed.")
 		return fuse.ReadResultData(make([]byte, 0)), fuse.EIO
 	}
-
-	// we are locked for the remainder of this op
-	inode.RLock()
-	defer inode.RUnlock()
-	return fuse.ReadResultFd(fd.Fd(), int64(in.Offset), int(in.Size)), fuse.OK
+	size := int(in.Size)
+	if size > len(buf) {
+		size = len(buf)
+	}
+	n, err := fd.ReadAt(buf[:size], int64(in.Offset))
+	if err != nil && err != io.EOF {
+		ctx.Error().Err(err).Msg("Could not read cache file.")
+		return fuse.ReadResultData(make([]byte, 0)), fuse.EIO
+	}
+	return fuse.ReadResultData(buf[:n]), fuse.OK
 }
 
 // Write to an Inode like a file. Note that changes are 100% local until

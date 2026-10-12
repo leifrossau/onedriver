@@ -74,10 +74,10 @@ type Server struct {
 	failDL  map[string]int  // path prefixes whose downloads are rejected, by status
 
 	dlMu      sync.Mutex
-	dlBytes   map[string]int64    // content bytes served, by item ID
-	dlRanges  map[string][]string // Range headers of content requests ("" = whole file), by item ID
-	dlCorrupt map[string]int      // item IDs whose next n content responses are corrupted
-	dlDelay   time.Duration       // delay before serving content
+	dlBytes   map[string]int64         // content bytes served, by item ID
+	dlRanges  map[string][]string      // Range headers of content requests ("" = whole file), by item ID
+	dlCorrupt map[string]int           // item IDs whose next n content responses are corrupted
+	dlDelay   map[string]time.Duration // delay before serving content, by item ID
 
 	reqMu      sync.Mutex
 	requests   []string
@@ -125,6 +125,7 @@ func New() *Server {
 		dlBytes:   make(map[string]int64),
 		dlRanges:  make(map[string][]string),
 		dlCorrupt: make(map[string]int),
+		dlDelay:   make(map[string]time.Duration),
 	}
 	s.pauseCV = sync.NewCond(&s.pauseMu)
 	now := time.Now().UTC()
@@ -255,11 +256,12 @@ func (s *Server) CorruptDownloads(id string, n int) {
 	s.dlCorrupt[id] = n
 }
 
-// SetDownloadDelay delays every content response by d (0 to disable).
-func (s *Server) SetDownloadDelay(d time.Duration) {
+// SetDownloadDelay delays the content responses for an item by d (0 to
+// disable). The delay happens without holding the server state lock.
+func (s *Server) SetDownloadDelay(id string, d time.Duration) {
 	s.dlMu.Lock()
 	defer s.dlMu.Unlock()
-	s.dlDelay = d
+	s.dlDelay[id] = d
 }
 
 // noteDownload records a content request and returns whether its response
@@ -276,10 +278,10 @@ func (s *Server) noteDownload(id, rng string, n int) bool {
 	return false
 }
 
-func (s *Server) downloadDelay() time.Duration {
+func (s *Server) downloadDelay(id string) time.Duration {
 	s.dlMu.Lock()
 	defer s.dlMu.Unlock()
-	return s.dlDelay
+	return s.dlDelay[id]
 }
 
 // failDownloadStatus returns the status downloads of p must fail with, or 0.

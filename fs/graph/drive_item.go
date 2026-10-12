@@ -184,7 +184,8 @@ func GetItemContentStream(id string, auth *Auth, output io.Writer) (uint64, erro
 
 	// multipart download
 	var n uint64
-	for i := 0; i < int(item.Size/downloadChunkSize)+1; i++ {
+	// (sizes that are a multiple of the chunk size have no partial last chunk)
+	for i := 0; uint64(i)*downloadChunkSize < item.Size; i++ {
 		start := i * downloadChunkSize
 		end := start + downloadChunkSize - 1
 		log.Info().

@@ -188,6 +188,31 @@ func TestContentRangeAndSimpleUpload(t *testing.T) {
 	assert.Equal(t, "replaced", string(got))
 }
 
+func TestContentDownloadStats(t *testing.T) {
+	s := New()
+	defer s.Close()
+	id := s.PutFile("/dl/a.bin", []byte("0123456789"))
+
+	code, body := call(t, s, "GET", "/me/drive/items/"+id+"/content", nil, "Range", "bytes=5-")
+	assert.Equal(t, 206, code)
+	assert.Equal(t, "56789", string(body))
+	code, body = call(t, s, "GET", "/me/drive/items/"+id+"/content", nil, "Range", "bytes=8-20")
+	assert.Equal(t, 206, code)
+	assert.Equal(t, "89", string(body))
+	code, _ = call(t, s, "GET", "/me/drive/items/"+id+"/content", nil, "Range", "bytes=10-12")
+	assert.Equal(t, 416, code)
+	assert.EqualValues(t, 7, s.DownloadedBytes(id))
+	assert.Equal(t, []string{"bytes=5-", "bytes=8-20"}, s.ContentRanges(id))
+
+	s.CorruptDownloads(id, 1)
+	_, body = call(t, s, "GET", "/me/drive/items/"+id+"/content", nil, "Range", "bytes=0-3")
+	assert.Equal(t, []byte{'0' ^ 0xff, '1', '2', '3'}, body)
+	_, body = call(t, s, "GET", "/me/drive/items/"+id+"/content", nil, "Range", "bytes=0-3")
+	assert.Equal(t, "0123", string(body), "only the next response is corrupted")
+	data, _ := s.Content(id)
+	assert.Equal(t, "0123456789", string(data))
+}
+
 func TestUploadSession(t *testing.T) {
 	s := New()
 	defer s.Close()
