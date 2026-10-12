@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -75,6 +74,10 @@ func writeFastaFixture(name string) error {
 // avoid having to repeatedly recreate auth_tokens.json and juggle multiple auth
 // sessions.
 func TestMain(m *testing.M) {
+	if os.Getenv(runnerEnv) == "1" {
+		runnerMain()
+		os.Exit(0)
+	}
 	// determine if we're running a single test in vscode or something
 	var singleTest bool
 	for _, arg := range os.Args {
@@ -107,7 +110,12 @@ func TestMain(m *testing.M) {
 	}
 	// attempt to unmount regardless of what happens (in case previous tests
 	// failed and didn't clean themselves up)
-	exec.Command("fusermount3", "-uz", mountLoc).Run()
+	// helper process for running external commands; must start before anything is mounted
+	if err := startRunner(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	runErr("fusermount3", "-uz", mountLoc)
 	os.Mkdir(mountLoc, 0755)
 	// wipe all cached data from previous tests
 	os.RemoveAll(testDBLoc)
@@ -186,9 +194,10 @@ func TestMain(m *testing.M) {
 	// unmount
 	if server.Unmount() != nil {
 		log.Error().Msg("Failed to unmount test fuse server, attempting lazy unmount")
-		exec.Command("fusermount3", "-zu", "mount").Run()
+		runErr("fusermount3", "-zu", "mount")
 	}
 	fmt.Println("Successfully unmounted fuse server!")
+	stopRunner()
 	if !live {
 		mock.Close()
 		if code == 0 {

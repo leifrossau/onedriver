@@ -3,7 +3,6 @@ package fs
 import (
 	"bytes"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -100,7 +99,7 @@ func TestUploadSessionSmallFS(t *testing.T) {
 func TestUploadSessionLargeFS(t *testing.T) {
 	t.Parallel()
 	fname := filepath.Join(TestDir, "dmel.fa")
-	require.NoError(t, exec.Command("cp", "dmel.fa", fname).Run())
+	require.NoError(t, runErr("cp", "dmel.fa", fname))
 
 	contents, err := os.ReadFile(fname)
 	require.NoError(t, err)

@@ -8,7 +8,6 @@ package fs
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -87,7 +86,7 @@ func mountMockAuth(t *testing.T, cacheDir string, auth *graph.Auth, deltaLoop bo
 	return mnt, cache, func() {
 		once.Do(func() {
 			if server.Unmount() != nil {
-				exec.Command("fusermount3", "-zu", mnt).Run()
+				runErr("fusermount3", "-zu", mnt)
 			}
 			cache.Stop()
 			os.Remove(mnt)

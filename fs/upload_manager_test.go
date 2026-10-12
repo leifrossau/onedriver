@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -32,7 +31,7 @@ func TestUploadDiskSerialization(t *testing.T) {
 	}
 	// write a file and get its id - we do this as a goroutine because uploads are
 	// blocking now
-	go exec.Command("cp", "dmel.fa", filepath.Join(TestDir, "upload_to_disk.fa")).Run()
+	go runErr("cp", "dmel.fa", filepath.Join(TestDir, "upload_to_disk.fa"))
 	time.Sleep(time.Second)
 	inode, err := fs.GetPath("/onedriver_tests/upload_to_disk.fa", nil)
 	require.NoError(t, err)

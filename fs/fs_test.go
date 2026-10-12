@@ -39,7 +39,7 @@ func TestReaddir(t *testing.T) {
 // does ls work and can we find the Documents folder?
 func TestLs(t *testing.T) {
 	t.Parallel()
-	stdout, err := exec.Command("ls", "mount").Output()
+	stdout, err := run("ls", "mount")
 	require.NoError(t, err)
 	sout := string(stdout)
 	if !strings.Contains(sout, "Documents") {
@@ -52,7 +52,7 @@ func TestTouchCreate(t *testing.T) {
 	t.Parallel()
 	fname := filepath.Join(TestDir, "empty")
 	syscall.Umask(022) // otherwise tests fail if default umask is 002
-	require.NoError(t, exec.Command("touch", fname).Run())
+	require.NoError(t, runErr("touch", fname))
 	st, err := os.Stat(fname)
 	require.NoError(t, err)
 
@@ -67,12 +67,12 @@ func TestTouchCreate(t *testing.T) {
 func TestTouchUpdateTime(t *testing.T) {
 	t.Parallel()
 	fname := filepath.Join(TestDir, "modtime")
-	require.NoError(t, exec.Command("touch", fname).Run())
+	require.NoError(t, runErr("touch", fname))
 	st1, _ := os.Stat(fname)
 
 	time.Sleep(2 * time.Second)
 
-	require.NoError(t, exec.Command("touch", fname).Run())
+	require.NoError(t, runErr("touch", fname))
 	st2, _ := os.Stat(fname)
 
 	if st2.ModTime().Equal(st1.ModTime()) || st2.ModTime().Before(st1.ModTime()) {
@@ -85,7 +85,7 @@ func TestTouchUpdateTime(t *testing.T) {
 func TestChmod(t *testing.T) {
 	t.Parallel()
 	fname := filepath.Join(TestDir, "chmod_tester")
-	require.NoError(t, exec.Command("touch", fname).Run())
+	require.NoError(t, runErr("touch", fname))
 	require.NoError(t, os.Chmod(fname, 0777))
 	st, _ := os.Stat(fname)
 	if st.Mode() != 0777 {
@@ -142,7 +142,7 @@ func TestWriteOffset(t *testing.T) {
 int main(int argc, char **argv) {
 	printf("ld writes files in a funny manner!");
 }`), 0644))
-	require.NoError(t, exec.Command("gcc", "-o", filepath.Join(TestDir, "main.o"), fname).Run())
+	require.NoError(t, runErr("gcc", "-o", filepath.Join(TestDir, "main.o"), fname))
 }
 
 // test that we can create a file and rename it
@@ -172,7 +172,7 @@ func TestCopy(t *testing.T) {
 	dname := filepath.Join(TestDir, "copy-end.txt")
 	content := "and copies too!\n"
 	require.NoError(t, os.WriteFile(fname, []byte(content), 0644))
-	require.NoError(t, exec.Command("cp", fname, dname).Run())
+	require.NoError(t, runErr("cp", fname, dname))
 
 	read, err := os.ReadFile(fname)
 	require.NoError(t, err)
@@ -278,9 +278,9 @@ func TestStatFs(t *testing.T) {
 func TestUnlink(t *testing.T) {
 	t.Parallel()
 	fname := filepath.Join(TestDir, "unlink_tester")
-	require.NoError(t, exec.Command("touch", fname).Run())
+	require.NoError(t, runErr("touch", fname))
 	require.NoError(t, os.Remove(fname))
-	stdout, _ := exec.Command("ls", "mount").Output()
+	stdout, _ := run("ls", "mount")
 	if strings.Contains(string(stdout), "unlink_tester") {
 		t.Fatalf("Deleting %s did not work.", fname)
 	}
@@ -346,7 +346,7 @@ func TestChildrenAreCasedProperly(t *testing.T) {
 	t.Parallel()
 	require.NoError(t, os.WriteFile(
 		filepath.Join(TestDir, "CASE-check.txt"), []byte("yep"), 0644))
-	stdout, err := exec.Command("ls", TestDir).Output()
+	stdout, err := run("ls", TestDir)
 	if err != nil {
 		t.Fatalf("%s: %s", err, stdout)
 	}
@@ -361,7 +361,7 @@ func TestChildrenAreCasedProperly(t *testing.T) {
 func TestEchoWritesToFile(t *testing.T) {
 	t.Parallel()
 	fname := filepath.Join(TestDir, "bagels")
-	out, err := exec.Command("bash", "-c", "echo bagels > "+fname).CombinedOutput()
+	out, err := runCombined("bash", "-c", "echo bagels > "+fname)
 	require.NoError(t, err, out)
 
 	content, err := os.ReadFile(fname)
@@ -392,7 +392,7 @@ func TestStat(t *testing.T) {
 // metadata corruption, as `ls` will exit with 1 if something bad happens.
 func TestNoQuestionMarks(t *testing.T) {
 	t.Parallel()
-	out, err := exec.Command("ls", "-l", "mount/").CombinedOutput()
+	out, err := runCombined("ls", "-l", "mount/")
 	if strings.Contains(string(out), "??????????") || err != nil {
 		t.Log("A Lookup() failed on an inode found by Readdir()")
 		t.Log(string(out))
@@ -410,7 +410,7 @@ func TestGIOTrash(t *testing.T) {
 	fname := filepath.Join(TestDir, "trash_me.txt")
 	require.NoError(t, os.WriteFile(fname, []byte("i should be trashed"), 0644))
 
-	out, err := exec.Command("gio", "trash", fname).CombinedOutput()
+	out, err := runCombined("gio", "trash", fname)
 	if err != nil {
 		t.Log(string(out))
 		t.Log(err)
@@ -459,13 +459,13 @@ func TestLibreOfficeSavePattern(t *testing.T) {
 	fname := filepath.Join(TestDir, "libreoffice.txt")
 	require.NoError(t, os.WriteFile(fname, content, 0644))
 
-	out, err := exec.Command(
+	out, err := runCombined(
 		"libreoffice",
 		"--headless",
 		"--convert-to", "docx",
 		"--outdir", TestDir,
 		fname,
-	).CombinedOutput()
+	)
 	require.NoError(t, err, out)
 	// libreoffice document conversion can fail with an exit code of 0,
 	// so we need to actually check the command output
