@@ -69,6 +69,7 @@ type Server struct {
 	pauseCV *sync.Cond
 	paused  map[string]bool // path prefixes whose uploads are held
 	failing map[string]int  // path prefixes whose uploads are rejected, by status
+	failDL  map[string]int  // path prefixes whose downloads are rejected, by status
 
 	reqMu    sync.Mutex
 	requests []string
@@ -82,6 +83,7 @@ func New() *Server {
 		uploads: make(map[string]*uploadSession),
 		paused:  make(map[string]bool),
 		failing: make(map[string]int),
+		failDL:  make(map[string]int),
 	}
 	s.pauseCV = sync.NewCond(&s.pauseMu)
 	now := time.Now().UTC()
@@ -166,6 +168,34 @@ func (s *Server) failStatus(p string) int {
 	s.pauseMu.Lock()
 	defer s.pauseMu.Unlock()
 	for prefix, status := range s.failing {
+		if under(p, prefix) {
+			return status
+		}
+	}
+	return 0
+}
+
+// FailDownloads makes content downloads for items at or below pathPrefix fail
+// with the given HTTP status until StopFailingDownloads is called with the
+// same prefix.
+func (s *Server) FailDownloads(pathPrefix string, status int) {
+	s.pauseMu.Lock()
+	defer s.pauseMu.Unlock()
+	s.failDL[path.Clean("/"+pathPrefix)] = status
+}
+
+// StopFailingDownloads undoes FailDownloads.
+func (s *Server) StopFailingDownloads(pathPrefix string) {
+	s.pauseMu.Lock()
+	defer s.pauseMu.Unlock()
+	delete(s.failDL, path.Clean("/"+pathPrefix))
+}
+
+// failDownloadStatus returns the status downloads of p must fail with, or 0.
+func (s *Server) failDownloadStatus(p string) int {
+	s.pauseMu.Lock()
+	defer s.pauseMu.Unlock()
+	for prefix, status := range s.failDL {
 		if under(p, prefix) {
 			return status
 		}

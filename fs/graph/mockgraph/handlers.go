@@ -212,6 +212,10 @@ func (s *Server) graph(w http.ResponseWriter, r *http.Request, p string) {
 			writeServiceErr(w, errNotFound)
 			return
 		}
+		if status := s.failDownloadStatus(s.pathOf(t.node)); status != 0 {
+			writeErr(w, status, "mockInjectedFailure", "download failure injected by the test")
+			return
+		}
 		serveContent(w, r, t.node)
 
 	case r.Method == http.MethodGet && t.suffix == "/delta":
