@@ -69,6 +69,18 @@ most once per second (coalesced).
 Errors use `org.freedesktop.DBus.Error.FileNotFound` for unknown paths and
 `org.freedesktop.DBus.Error.Failed` otherwise.
 
+### Transfers (v1.1)
+
+| Method | Signature | Meaning |
+|---|---|---|
+| `GetTransfers` | `() → a(sssttx)` | uploads and downloads that are queued, running or waiting to retry: (path relative to the mountpoint, direction `upload` or `download`, state `queued`, `active` or `retrying`, bytes done, bytes total, unix time the transfer was queued). Active transfers first, then by queue time. |
+
+Downloads include files opened by applications and pinned files being
+hydrated. Bytes done is updated while data is transferred (per chunk for
+large uploads, continuously for downloads); small uploads go from 0 to done
+in one step. Finished transfers disappear from the list and show up in
+`GetRecent`.
+
 ## Signals
 
 | Signal | Signature | Meaning |
@@ -76,3 +88,17 @@ Errors use `org.freedesktop.DBus.Error.FileNotFound` for unknown paths and
 | `Notify` | `(s kind, s path, s message)` | something the user should know about. `kind` is `conflict` (a conflict copy was created, `path` is the copy), `upload-failed` (an upload was dropped), `auth-expired` (login needed again) or `error`. |
 
 Clients show `Notify` as desktop notifications.
+
+| Signal | Signature | Meaning |
+|---|---|---|
+| `TransfersChanged` | `()` | the result of `GetTransfers` changed (a transfer was added, finished or made progress). Coalesced to at most 4 per second. Clients call `GetTransfers` and `GetRecent` again. |
+
+## Activity window
+
+`onedriver-activity` (the popup shown when the tray icon is clicked) owns
+`io.github.onedriver.Activity` on the session bus, object path
+`/io/github/onedriver/Activity`, interface `io.github.onedriver.Activity1`
+with one method, `Toggle() → ()`, which shows the window if hidden and hides
+it if shown. A second `onedriver-activity` process calls `Toggle` on the
+running one and exits. The tray's left click (SNI `Activate`) calls `Toggle`,
+and starts `onedriver-activity` if the name has no owner.
