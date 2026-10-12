@@ -16,7 +16,6 @@ license=('GPL-3.0-or-later')
 depends=('fuse3' 'webkit2gtk-4.1' 'gtk3' 'gst-plugins-good'
          'qt6-base' 'qt6-declarative' 'kirigami' 'layer-shell-qt' 'qqc2-desktop-style')
 makedepends=('go' 'gcc' 'pkg-config' 'cmake' 'extra-cmake-modules' 'git')
-optdepends=('qt6-wayland: run the activity popup natively on Wayland')
 provides=('onedriver')
 conflicts=('onedriver')
 # $startdir is the directory holding this PKGBUILD; the repo root is two levels up.

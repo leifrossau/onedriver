@@ -20,7 +20,6 @@ pkgbase = onedriver-fork
 	depends = kirigami
 	depends = layer-shell-qt
 	depends = qqc2-desktop-style
-	optdepends = qt6-wayland: run the activity popup natively on Wayland
 	provides = onedriver
 	conflicts = onedriver
 	options = !lto
