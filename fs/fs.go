@@ -1046,13 +1046,16 @@ func (f *Filesystem) SetAttr(cancel <-chan struct{}, in *fuse.SetAttrIn, out *fu
 	}
 	path := i.Path()
 	isDir := i.IsDir() // holds an rlock
-	if size, valid := in.GetSize(); valid && size > 0 {
-		// truncating keeps (part of) the content: make sure it is complete
-		ctx := log.With().Str("op", "SetAttr").Str("path", path).Logger()
-		if st := f.ensureFull(ctx, i); st != fuse.OK {
+	if size, valid := in.GetSize(); valid && size > 0 && !isDir && !i.HasChanges() {
+		// Truncating keeps (part of) the content, so it must be complete and
+		// current first: partially cached, stale, or never downloaded at all
+		// (truncate(2) without open). Same path as opening for writing.
+		openIn := &fuse.OpenIn{InHeader: in.InHeader, Flags: uint32(os.O_RDWR)}
+		if st := f.open(cancel, openIn, &fuse.OpenOut{}); st != fuse.OK {
 			return st
 		}
 	}
+	truncated := false
 	i.Lock()
 
 	ctx := log.With().
@@ -1108,9 +1111,15 @@ func (f *Filesystem) SetAttr(cancel <-chan struct{}, in *fuse.SetAttrIn, out *fu
 			f.stateChanged(i.DriveItem.ID)
 		}
 		i.hasChanges = true
+		truncated = true
 	}
 
 	i.Unlock()
+	if truncated && in.Valid&fuse.FATTR_FH == 0 {
+		// truncate(2) on a path, not through an open file: no Flush/Fsync
+		// will follow, so queue the upload now like saving a file does
+		f.Fsync(cancel, &fuse.FsyncIn{InHeader: in.InHeader})
+	}
 	out.Attr = i.makeAttr()
 	out.SetTimeout(timeout)
 	return fuse.OK

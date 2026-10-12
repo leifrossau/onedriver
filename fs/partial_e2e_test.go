@@ -478,3 +478,30 @@ func TestPartialRangesPersist(t *testing.T) {
 	assert.Equal(t, before, mock.DownloadedBytes(id), "cached range must not be fetched again")
 	assert.Equal(t, "cloud", getState(t, filepath.Join(mnt, rel)))
 }
+
+// Regression: truncate(2) to a smaller, non-zero size on a file whose content
+// was never downloaded must keep the original bytes, not upload zeros.
+func TestTruncateNeverDownloaded(t *testing.T) {
+	t.Parallel()
+	const remoteDir = "/e2e_truncate_cold"
+	content := randomContent(11, partialMidSize)
+	id := mock.PutFile(remoteDir+"/cold.bin", content)
+	dir, _ := mountMockFS(t, remoteDir)
+	fname := filepath.Join(dir, "cold.bin")
+
+	require.NoError(t, os.Truncate(fname, 1<<20))
+
+	want := content[:1<<20]
+	ok := assert.Eventually(t, func() bool {
+		data, ok := mock.Content(id)
+		return ok && bytes.Equal(data, want)
+	}, 20*time.Second, 100*time.Millisecond, "upload must contain the first MiB of the original content")
+	if !ok {
+		data, _ := mock.Content(id)
+		local, _ := os.ReadFile(fname)
+		t.Logf("server has %d bytes (orig prefix match %v), local has %d bytes (prefix match %v, zeros %v)",
+			len(data), len(data) >= 4096 && bytes.Equal(data[:4096], content[:4096]),
+			len(local), len(local) >= 4096 && bytes.Equal(local[:4096], content[:4096]),
+			len(local) >= 4096 && bytes.Equal(local[:4096], make([]byte, 4096)))
+	}
+}
