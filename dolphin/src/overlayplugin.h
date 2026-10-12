@@ -9,9 +9,14 @@
 /// Shows the onedriver file state (cloud / pinned / syncing / error) as
 /// emblems in Dolphin. State comes from xattrs; D-Bus is only used to find
 /// the mountpoints and to learn when states changed.
+// Dolphin loads overlay plugins with QPluginLoader and qobject_casts the
+// root object to KOverlayIconPlugin, so the class itself must be the Qt
+// plugin (K_PLUGIN_CLASS_WITH_JSON would make a factory the root object and
+// Dolphin silently drops the plugin).
 class OneDriverOverlayPlugin : public KOverlayIconPlugin
 {
     Q_OBJECT
+    Q_PLUGIN_METADATA(IID "org.kde.overlayicon.onedriver" FILE "onedriveroverlay.json")
 
 public:
     explicit OneDriverOverlayPlugin(QObject *parent = nullptr);

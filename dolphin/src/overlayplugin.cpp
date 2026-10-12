@@ -2,7 +2,6 @@
 #include "overlayplugin.h"
 #include "logic.h"
 
-#include <KPluginFactory>
 
 #include <QDBusConnection>
 #include <QDBusConnectionInterface>
@@ -15,8 +14,6 @@
 #include <QUrl>
 
 using namespace OneDriverDolphin;
-
-K_PLUGIN_CLASS_WITH_JSON(OneDriverOverlayPlugin, "onedriveroverlay.json")
 
 /// Receives FileStatesChanged of one mount instance.
 class MountWatcher : public QObject

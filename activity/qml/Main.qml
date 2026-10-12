@@ -126,6 +126,9 @@ Window {
 
                     ColumnLayout {
                         Layout.fillWidth: true
+                        // fill the panel, otherwise the column shrinks to the
+                        // label and the "centered" content sits at the left
+                        Layout.preferredWidth: scroll.availableWidth
                         Layout.topMargin: Kirigami.Units.largeSpacing
                         Layout.bottomMargin: Kirigami.Units.largeSpacing
                         visible: win.backend.transfersSupported && win.backend.connected && transfers.count === 0
@@ -138,7 +141,8 @@ Window {
                             implicitHeight: Kirigami.Units.iconSizes.large
                         }
                         QQC2.Label {
-                            Layout.alignment: Qt.AlignHCenter
+                            Layout.fillWidth: true
+                            horizontalAlignment: Text.AlignHCenter
                             text: qsTr("Everything is up to date")
                             opacity: 0.8
                         }
