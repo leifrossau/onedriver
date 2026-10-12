@@ -168,7 +168,9 @@ func TestUploadSessionLargeUsesFinalResponse(t *testing.T) {
 	for _, r := range mock.Requests()[before:] {
 		if strings.HasPrefix(r, "PUT /upload/") {
 			sawPut = true
-		} else if sawPut && strings.HasPrefix(r, "GET ") && !strings.Contains(r, "/delta") {
+		} else if sawPut && strings.HasPrefix(r, "GET ") && !strings.Contains(r, "/delta") &&
+			strings.Contains(r, session.ID) && !strings.Contains(r, "/children") {
+			// (other tests run in parallel, only requests for this item count)
 			t.Errorf("item was refetched after the final chunk: %s", r)
 		}
 	}

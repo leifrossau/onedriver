@@ -301,10 +301,10 @@ func TestDeltaFolderDeletion(t *testing.T) {
 		inodes, _ := os.ReadDir(DeltaDir)
 		for _, inode := range inodes {
 			if inode.Name() == "nested" {
-				return true
+				return false
 			}
 		}
-		return false
+		return true
 	}, retrySeconds, time.Second, "\"nested/\" directory was not deleted.")
 }
 
