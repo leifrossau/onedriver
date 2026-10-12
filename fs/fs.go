@@ -12,6 +12,7 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/jstaf/onedriver/fs/graph"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -482,13 +483,6 @@ func (f *Filesystem) Open(cancel <-chan struct{}, in *fuse.OpenIn, out *fuse.Ope
 
 	ctx.Debug().Msg("")
 
-	// we have something on disk-
-	// verify content against what we're supposed to have
-	inode.Lock()
-	defer inode.Unlock()
-	// stay locked until end to prevent multiple Opens() from competing for
-	// downloads of the same file.
-
 	// try grabbing from disk
 	fd, err := f.content.Open(id)
 	if err != nil {
@@ -501,20 +495,100 @@ func (f *Filesystem) Open(cancel <-chan struct{}, in *fuse.OpenIn, out *fuse.Ope
 		return fuse.OK
 	}
 
-	if inode.VerifyChecksum(graph.QuickXORHashStream(fd)) {
-		// disk content is only used if the checksums match
-		ctx.Info().Msg("Found content in cache.")
-
-		// we check size ourselves in case the API file sizes are WRONG (it happens)
-		st, err := fd.Stat()
-		if err != nil {
-			ctx.Error().Err(err).Msg("Could not fetch file stats.")
-			return fuse.EIO
+	// The inode lock is only held briefly to read/update metadata, never
+	// while hashing or downloading, so GetAttr/Lookup/ReadDirPlus on this
+	// inode are not blocked. Concurrent Opens of the same file are serialized
+	// by the per-ID download lock instead.
+	for {
+		inode.RLock()
+		hasChanges := inode.hasChanges
+		remoteHash := ""
+		if inode.DriveItem.File != nil {
+			remoteHash = inode.DriveItem.File.Hashes.QuickXorHash
 		}
-		inode.DriveItem.Size = uint64(st.Size())
-		return fuse.OK
+		inode.RUnlock()
+
+		if hasChanges {
+			// local content is newer than the server's, never replace it
+			ctx.Debug().Msg("Using local content, file has pending changes.")
+			return fuse.OK
+		}
+
+		if status, done := f.useCachedContent(ctx, inode, fd, remoteHash); done {
+			return status
+		}
+
+		unlock, wait := f.lockDownload(id)
+		if wait {
+			// someone else is downloading this file, retry once they finish
+			continue
+		}
+		status := f.downloadContent(ctx, inode, fd, remoteHash)
+		unlock()
+		return status
+	}
+}
+
+// useCachedContent returns done=true with a status if the content on disk
+// can be used as-is (its hash matches remoteHash).
+func (f *Filesystem) useCachedContent(ctx zerolog.Logger, inode *Inode, fd *os.File, remoteHash string) (fuse.Status, bool) {
+	id := inode.ID()
+	st, err := fd.Stat()
+	if err != nil {
+		ctx.Error().Err(err).Msg("Could not fetch file stats.")
+		return fuse.EIO, true
 	}
 
+	// skip re-hashing if the file is unchanged since we last verified it
+	state := verifiedContent{
+		hash: strings.ToLower(remoteHash), size: st.Size(), mtime: st.ModTime(),
+	}
+	if v, ok := f.verified.Load(id); !ok || v.(verifiedContent) != state {
+		if remoteHash == "" || !strings.EqualFold(remoteHash, graph.QuickXORHashStream(fd)) {
+			return fuse.OK, false
+		}
+		// hashing may have raced with writes, so re-stat before trusting it
+		if st2, err := fd.Stat(); err != nil || st2.Size() != st.Size() || !st2.ModTime().Equal(st.ModTime()) {
+			return fuse.OK, false
+		}
+		f.verified.Store(id, state)
+	}
+
+	// disk content is only used if the checksums match
+	ctx.Info().Msg("Found content in cache.")
+	// we check size ourselves in case the API file sizes are WRONG (it happens)
+	inode.Lock()
+	inode.DriveItem.Size = uint64(st.Size())
+	inode.Unlock()
+	return fuse.OK, true
+}
+
+// lockDownload takes the download lock for an ID. If someone else already
+// holds it, it blocks until they are done and returns wait=true so the caller
+// can re-check the cache. Otherwise the caller must call unlock when done.
+func (f *Filesystem) lockDownload(id string) (unlock func(), wait bool) {
+	f.downloadsM.Lock()
+	if ch, ok := f.downloads[id]; ok {
+		f.downloadsM.Unlock()
+		<-ch
+		return nil, true
+	}
+	ch := make(chan struct{})
+	f.downloads[id] = ch
+	f.downloadsM.Unlock()
+	return func() {
+		f.downloadsM.Lock()
+		delete(f.downloads, id)
+		f.downloadsM.Unlock()
+		close(ch)
+	}, false
+}
+
+// downloadContent fetches an item's content from the server (without holding
+// the inode lock) and installs it into the content cache if the inode did not
+// change in the meantime.
+func (f *Filesystem) downloadContent(ctx zerolog.Logger, inode *Inode, fd *os.File, remoteHash string) fuse.Status {
+	id := inode.ID()
 	ctx.Info().Msg(
 		"Not using cached item due to file hash mismatch, fetching content from API.",
 	)
@@ -527,12 +601,27 @@ func (f *Filesystem) Open(cancel <-chan struct{}, in *fuse.OpenIn, out *fuse.Ope
 		return fuse.EIO
 	}
 	defer f.content.Delete(tempID)
+	temp.Seek(0, 0)
+	temp.Truncate(0)
 
 	// replace content only on a match
 	size, err := graph.GetItemContentStream(id, f.auth, temp)
-	if err != nil || !inode.VerifyChecksum(graph.QuickXORHashStream(temp)) {
+	if err != nil || remoteHash == "" ||
+		!strings.EqualFold(remoteHash, graph.QuickXORHashStream(temp)) {
 		ctx.Error().Err(err).Msg("Failed to fetch remote content.")
 		return fuse.EREMOTEIO
+	}
+
+	inode.Lock()
+	defer inode.Unlock()
+	if f.GetID(id) != inode {
+		// deleted or re-ID'd while downloading
+		ctx.Warn().Msg("Inode changed during download, discarding content.")
+		return fuse.OK
+	}
+	if inode.hasChanges {
+		ctx.Warn().Msg("Local changes made during download, keeping local content.")
+		return fuse.OK
 	}
 	temp.Seek(0, 0) // being explicit, even though already done in hashstream func
 	fd.Seek(0, 0)
