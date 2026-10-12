@@ -145,6 +145,7 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 
 		case cancelID := <-u.deletionQueue: // remove uploads for deleted items
 			u.finishUpload(u.resolveID(cancelID))
+			u.forgetIfIdle(cancelID)
 
 		case req := <-u.moveQueue: // an item's ID changed (local -> server ID)
 			u.moveUpload(req.oldID, req.newID)
@@ -193,6 +194,7 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 								"Local changes were NOT uploaded to OneDrive; the file is kept " +
 								"marked as modified and will be uploaded the next time it is saved.")
 						u.finishUpload(session.ID)
+						u.forgetIfIdle(session.ID)
 						u.fs.noteUploadDropped(session.ID, u.sessionPath(session), session)
 						// Do not leave the inode looking clean: hasChanges was
 						// cleared when the upload was queued, and with the
@@ -261,6 +263,9 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 					u.finishUpload(session.OldID)
 					u.fs.noteUploadDone(session.ID, session.OldID)
 					u.fs.recordActivity(u.sessionPath(session), status.ActionUploaded)
+					// only now does the transfer leave the list, so it shows
+					// up in the recent activity first
+					u.forgetIfIdle(session.ID)
 				}
 			}
 		}
@@ -320,7 +325,9 @@ func (u *UploadManager) queueReservedUpload(inode *Inode, reservedID string) err
 		return err
 	}
 	session.reservedID = reservedID
-	u.tr().queue(u.resolveID(reservedID), status.DirUpload, session.Name, session.Size)
+	// the full path is kept as a fallback for listing while the item is
+	// briefly not found under its ID (during the local -> server ID change)
+	u.tr().queue(u.resolveID(reservedID), status.DirUpload, inode.Path(), session.Size)
 	select {
 	case u.queue <- session:
 		return nil
@@ -558,7 +565,6 @@ func (u *UploadManager) finishUpload(id string) {
 	u.sessionsM.Lock()
 	delete(u.sessions, id)
 	u.sessionsM.Unlock()
-	u.forgetIfIdle(id)
 }
 
 // sessionState returns the state of the upload session for the given ID, and
