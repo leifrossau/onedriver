@@ -21,6 +21,7 @@ var bucketUploads = []byte("uploads")
 type UploadManager struct {
 	queue         chan *UploadSession
 	deletionQueue chan string
+	moveQueue     chan moveRequest
 	sessions      map[string]*UploadSession
 	auth          *graph.Auth
 	fs            *Filesystem
@@ -33,6 +34,21 @@ type UploadManager struct {
 	sessionsM sync.RWMutex
 	reserved  map[string]int      // uploads queued but not yet received by uploadLoop
 	hashes    map[string][]string // recent content hashes we have uploaded, by ID
+	aliases   map[string]idAlias  // old ID -> new ID of items whose ID changed
+}
+
+// How long an old -> new ID mapping is remembered after an item's ID changed,
+// to redirect sessions, reservations and cancellations still using the old ID.
+const aliasTTL = 10 * time.Minute
+
+type idAlias struct {
+	newID string
+	at    time.Time
+}
+
+type moveRequest struct {
+	oldID, newID string
+	done         chan struct{}
 }
 
 // NewUploadManager creates a new queue/thread for uploads
@@ -43,6 +59,8 @@ func NewUploadManager(duration time.Duration, db *bolt.DB, fs *Filesystem, auth 
 		sessions:      make(map[string]*UploadSession),
 		reserved:      make(map[string]int),
 		hashes:        make(map[string][]string),
+		aliases:       make(map[string]idAlias),
+		moveQueue:     make(chan moveRequest),
 		auth:          auth,
 		db:            db,
 		fs:            fs,
@@ -79,6 +97,7 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 	for {
 		select {
 		case session := <-u.queue: // new sessions
+			u.resolveSession(session)
 			// deduplicate sessions for the same item
 			if old, exists := u.sessions[session.ID]; exists {
 				old.cancel(u.auth)
@@ -99,7 +118,11 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 			u.sessionsM.Unlock()
 
 		case cancelID := <-u.deletionQueue: // remove uploads for deleted items
-			u.finishUpload(cancelID)
+			u.finishUpload(u.resolveID(cancelID))
+
+		case req := <-u.moveQueue: // an item's ID changed (local -> server ID)
+			u.moveUpload(req.oldID, req.newID)
+			close(req.done)
 
 		case <-ticker.C: // periodically start uploads, or remove them if done/failed
 			// The number of uploads in flight is derived from session states
@@ -172,7 +195,11 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 					// ID changed during upload, move to new ID
 					if session.OldID != session.ID {
 						u.recordHash(session.ID, session.QuickXORHash)
-						err := u.fs.MoveID(session.OldID, session.ID)
+						// MoveID would deadlock on the upload loop, re-key
+						// directly (this sets session.OldID to the new ID)
+						oldID := session.OldID
+						u.moveUpload(oldID, session.ID)
+						err := u.fs.moveID(oldID, session.ID)
 						if err != nil {
 							log.Error().
 								Str("id", session.ID).
@@ -214,7 +241,7 @@ func (u *UploadManager) QueueUpload(inode *Inode) error {
 // queueReservedUpload.
 func (u *UploadManager) reserveUpload(id string) {
 	u.sessionsM.Lock()
-	u.reserved[id]++
+	u.reserved[u.resolveLocked(id)]++
 	u.sessionsM.Unlock()
 }
 
@@ -235,6 +262,7 @@ func (u *UploadManager) queueReservedUpload(inode *Inode, reservedID string) err
 
 // releaseLocked drops a reservation. sessionsM must be held.
 func (u *UploadManager) releaseLocked(id string) {
+	id = u.resolveLocked(id)
 	if u.reserved[id] <= 1 {
 		delete(u.reserved, id)
 	} else {
@@ -254,6 +282,7 @@ func (u *UploadManager) recordHashLocked(id string, hash string) {
 	if hash == "" {
 		return
 	}
+	id = u.resolveLocked(id)
 	hashes := u.hashes[id]
 	for _, h := range hashes {
 		if h == hash {
@@ -277,6 +306,7 @@ func (u *UploadManager) IsUploadPending(ids ...string) bool {
 		if id == "" {
 			continue
 		}
+		id = u.resolveLocked(id)
 		if _, exists := u.sessions[id]; exists || u.reserved[id] > 0 {
 			return true
 		}
@@ -291,7 +321,7 @@ func (u *UploadManager) UploadedHashes(ids ...string) []string {
 	defer u.sessionsM.RUnlock()
 	out := make([]string, 0)
 	for _, id := range ids {
-		out = append(out, u.hashes[id]...)
+		out = append(out, u.hashes[u.resolveLocked(id)]...)
 	}
 	return out
 }
@@ -299,6 +329,133 @@ func (u *UploadManager) UploadedHashes(ids ...string) []string {
 // CancelUpload is used to kill any pending uploads for a session
 func (u *UploadManager) CancelUpload(id string) {
 	u.deletionQueue <- id
+}
+
+// MoveUpload re-keys any pending upload (session, reservations and uploaded
+// hashes) for an item whose ID changed from oldID to newID, typically a local
+// ID being replaced by the server ID. The upload is kept, not cancelled, and
+// from then on targets the item by its new ID. Uploads, reservations and
+// cancellations that still use oldID later on are redirected to newID. Blocks
+// until done; must not be called from the upload loop or with an inode lock
+// held.
+func (u *UploadManager) MoveUpload(oldID, newID string) {
+	req := moveRequest{oldID: oldID, newID: newID, done: make(chan struct{})}
+	u.moveQueue <- req
+	<-req.done
+}
+
+// moveUpload implements MoveUpload. Only called on the upload loop goroutine,
+// which is the only writer of u.sessions.
+func (u *UploadManager) moveUpload(oldID, newID string) {
+	if oldID == newID || oldID == "" || newID == "" {
+		return
+	}
+	now := time.Now()
+	u.sessionsM.Lock()
+	for id, alias := range u.aliases {
+		if now.Sub(alias.at) > aliasTTL {
+			delete(u.aliases, id)
+		}
+	}
+	if u.resolveLocked(newID) == oldID {
+		// would form a cycle, nothing sensible to do
+		u.sessionsM.Unlock()
+		return
+	}
+	u.aliases[oldID] = idAlias{newID: newID, at: now}
+
+	if n := u.reserved[oldID]; n > 0 {
+		delete(u.reserved, oldID)
+		u.reserved[u.resolveLocked(newID)] += n
+	}
+	if hashes, exists := u.hashes[oldID]; exists {
+		delete(u.hashes, oldID)
+		for _, hash := range hashes {
+			u.recordHashLocked(newID, hash)
+		}
+	}
+
+	session, exists := u.sessions[oldID]
+	keep := false
+	if exists {
+		delete(u.sessions, oldID)
+		if _, taken := u.sessions[newID]; !taken {
+			// a session already under the new ID was queued later, so it
+			// is newer and wins, otherwise move this one over
+			keep = true
+			session.Lock()
+			session.ID = newID
+			session.OldID = newID
+			session.Unlock()
+			u.sessions[newID] = session
+		}
+	}
+	u.sessionsM.Unlock()
+
+	if exists {
+		var contents []byte
+		if keep {
+			contents, _ = json.Marshal(session)
+		}
+		u.db.Batch(func(tx *bolt.Tx) error {
+			b, _ := tx.CreateBucketIfNotExists(bucketUploads)
+			b.Delete([]byte(oldID))
+			if keep {
+				return b.Put([]byte(newID), contents)
+			}
+			return nil
+		})
+	}
+}
+
+// UploadedAs returns the (local) ID that an upload was queued under, if that
+// upload has already created the item with the given server ID on the server
+// but the upload loop has not processed its completion yet (so the item is
+// still tracked under its old ID). Returns "" if there is none. Safe to call
+// from any goroutine.
+func (u *UploadManager) UploadedAs(id string) string {
+	u.sessionsM.RLock()
+	defer u.sessionsM.RUnlock()
+	for key, session := range u.sessions {
+		session.Lock()
+		sessionID := session.ID
+		session.Unlock()
+		if sessionID == id && key != id {
+			return key
+		}
+	}
+	return ""
+}
+
+// resolveLocked follows old -> new ID mappings. sessionsM must be held.
+func (u *UploadManager) resolveLocked(id string) string {
+	for i := 0; i < 8; i++ {
+		alias, exists := u.aliases[id]
+		if !exists {
+			break
+		}
+		id = alias.newID
+	}
+	return id
+}
+
+// resolveID is resolveLocked for callers not holding sessionsM.
+func (u *UploadManager) resolveID(id string) string {
+	u.sessionsM.RLock()
+	defer u.sessionsM.RUnlock()
+	return u.resolveLocked(id)
+}
+
+// resolveSession points a newly queued session that was created under an ID
+// which has since changed at the item's current ID. Only called on the upload
+// loop goroutine, before the session is started.
+func (u *UploadManager) resolveSession(session *UploadSession) {
+	if id := u.resolveID(session.ID); id != session.ID {
+		session.Lock()
+		session.ID = id
+		session.OldID = id
+		session.Unlock()
+	}
 }
 
 // finishUpload is an internal method that gets called when a session is
@@ -324,6 +481,7 @@ func (u *UploadManager) finishUpload(id string) {
 // Fsync). Safe to call from any goroutine, never blocks on the upload loop.
 func (u *UploadManager) sessionState(id string) (state int, exists bool) {
 	u.sessionsM.RLock()
+	id = u.resolveLocked(id)
 	session, exists := u.sessions[id]
 	reserved := u.reserved[id] > 0
 	u.sessionsM.RUnlock()

@@ -205,21 +205,18 @@ func TestDeltaRemoteEditNoConflict(t *testing.T) {
 	assert.Len(t, entries, 1, "unexpected conflict copy")
 }
 
-// BUG: a server-side rename that arrives (via delta) after our own upload
-// reached the server but before the upload manager noticed it had completed is
-// lost. applyDelta cannot match the delta to the still-local-ID inode (the name
-// differs), so it inserts a second inode for the new ID; then the upload
-// manager's MoveID(local -> remote) replaces it, and the file keeps its old
-// name locally even though the delta is never repeated.
+// Regression: a server-side rename that arrives (via delta) after our own
+// upload reached the server but before the upload manager noticed it had
+// completed used to be lost. applyDelta could not match the delta to the
+// still-local-ID inode (the name differs), so it inserted a second inode for
+// the new ID; then the upload manager's MoveID(local -> remote) replaced it,
+// and the file kept its old name locally even though the delta is never
+// repeated.
 //
 // The race window is up to one upload manager tick, so this loops a few times
-// to hit it reliably. Skipped by default so the suite stays green; run with
-// ONEDRIVER_TEST_KNOWN_BUGS=1 to see it fail.
+// to hit it reliably.
 func TestDeltaRenameWhileUploadCompletes(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("ONEDRIVER_TEST_KNOWN_BUGS") != "1" {
-		t.Skip("known bug (see comment), run with ONEDRIVER_TEST_KNOWN_BUGS=1")
-	}
 	const remoteDir = "/e2e_rename_race"
 	dir := mountMock(t, remoteDir)
 
@@ -274,21 +271,16 @@ func TestUploadManagerInFlightLeak(t *testing.T) {
 	}, 20*time.Second, 200*time.Millisecond, "upload manager is stuck: inFlight slots leaked")
 }
 
-// BUG: a file that is rewritten while its first upload is in flight is never
-// uploaded again if the server-side copy shows up in delta before the upload
-// manager notices the first upload completed: applyDelta calls
+// Regression: a file that is rewritten while its first upload is in flight
+// was never uploaded again if the server-side copy showed up in delta before
+// the upload manager noticed the first upload completed: applyDelta calls
 // MoveID(local -> remote) ("Local item already exists under different ID"),
-// and MoveID uses DeleteID, which calls UploadManager.CancelUpload and so drops
-// the queued second session. The local copy has the new content (and
-// hasChanges == false), the server keeps the old one, silently.
-// MovePath was already switched to deleteID for exactly this reason.
-//
-// Skipped by default; run with ONEDRIVER_TEST_KNOWN_BUGS=1 to see it fail.
+// and MoveID used DeleteID, which calls UploadManager.CancelUpload and so
+// dropped the queued second session. The local copy had the new content (and
+// hasChanges == false), the server kept the old one, silently. MoveID now
+// re-keys pending uploads to the new ID instead.
 func TestRewriteDuringUploadIsNotLost(t *testing.T) {
 	t.Parallel()
-	if os.Getenv("ONEDRIVER_TEST_KNOWN_BUGS") != "1" {
-		t.Skip("known bug (see comment), run with ONEDRIVER_TEST_KNOWN_BUGS=1")
-	}
 	const remoteDir = "/e2e_rewrite"
 	dir := mountMock(t, remoteDir)
 	fname := filepath.Join(dir, "file.txt")
@@ -312,4 +304,9 @@ func TestRewriteDuringUploadIsNotLost(t *testing.T) {
 		got, _ := mock.ContentPath(remote)
 		return string(got) == "second"
 	}, 20*time.Second, 200*time.Millisecond, "the second write was never uploaded")
+	// the second upload must target the existing item, not create a copy
+	assert.Equal(t, []string{"file.txt"}, mock.List(remoteDir))
+	local, err := os.ReadFile(fname)
+	require.NoError(t, err)
+	assert.Equal(t, "second", string(local))
 }
