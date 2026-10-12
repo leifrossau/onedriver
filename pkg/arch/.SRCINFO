@@ -23,7 +23,7 @@ pkgbase = onedriver-fork
 	provides = onedriver
 	conflicts = onedriver
 	options = !lto
-	source = onedriver::git+file:///home/leifrossau/Projekter/OneDrive/.claude/worktrees/agent-a2ca7128c3634431d/pkg/arch/../..
+	source = onedriver::git+file:///home/leifrossau/Projekter/OneDrive/pkg/arch/../..
 	sha256sums = SKIP
 
 pkgname = onedriver-fork
