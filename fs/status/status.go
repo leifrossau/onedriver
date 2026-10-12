@@ -81,3 +81,24 @@ type Notification struct {
 	Path    string
 	Message string
 }
+
+// Transfer directions and states, as reported by GetTransfers.
+const (
+	DirUpload   = "upload"
+	DirDownload = "download"
+
+	TransferQueued   = "queued"
+	TransferActive   = "active"
+	TransferRetrying = "retrying"
+)
+
+// Transfer is an upload or download that is queued, running or waiting to be
+// retried.
+type Transfer struct {
+	Path       string // relative to the mountpoint
+	Direction  string
+	State      string
+	BytesDone  uint64
+	BytesTotal uint64
+	QueuedAt   int64 // unix time
+}

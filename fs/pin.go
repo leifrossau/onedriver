@@ -104,6 +104,7 @@ type pinJob struct {
 	id        string
 	attempts  int
 	notBefore time.Time
+	queuedAt  time.Time
 }
 
 // pinWorker downloads pinned content in the background and evicts unpinned
@@ -176,9 +177,10 @@ func (w *pinWorker) enqueue(id string) {
 	if job, ok := w.pending[id]; ok {
 		job.notBefore = time.Time{} // something changed, retry right away
 	} else {
-		w.pending[id] = &pinJob{id: id}
+		w.pending[id] = &pinJob{id: id, queuedAt: time.Now()}
 	}
 	w.mu.Unlock()
+	w.f.transfers.touch()
 	w.signal()
 }
 
@@ -245,6 +247,7 @@ func (w *pinWorker) step(jobs *sync.WaitGroup) {
 			continue
 		}
 		delete(w.pending, id)
+		w.f.transfers.touch()
 		w.active[id] = true
 		jobs.Add(1)
 		go func(job *pinJob) {
@@ -286,6 +289,7 @@ func (w *pinWorker) finish(job *pinJob, err error) {
 			}
 			job.notBefore = time.Now().Add(backoff)
 			w.pending[job.id] = job
+			w.f.transfers.touch()
 			log.Warn().Err(err).Str("id", job.id).Int("attempts", job.attempts).
 				Dur("backoff", backoff).Msg("Could not hydrate pinned item, will retry.")
 		}

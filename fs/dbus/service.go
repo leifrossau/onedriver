@@ -29,6 +29,9 @@ type Backend interface {
 	SetPinnedPath(path string, pinned bool) error
 	EvictPath(path string) error
 	WebURL(path string) (string, error)
+	Transfers() []status.Transfer
+	// TransfersVersion changes whenever Transfers may return something new
+	TransfersVersion() uint64
 	Subscribe(handler func(status.Notification)) (cancel func())
 	// ErrNotFound reporting: errors for which IsNotFound is true map to
 	// org.freedesktop.DBus.Error.FileNotFound
@@ -42,6 +45,9 @@ const (
 
 	// PropertiesChanged is emitted at most this often
 	changeInterval = time.Second
+
+	// TransfersChanged is emitted at most this often
+	transfersInterval = 250 * time.Millisecond
 )
 
 // Service is the exported D-Bus object of one mount.
@@ -126,11 +132,21 @@ func (s *Service) loop() {
 	defer s.done.Done()
 	ticker := time.NewTicker(changeInterval)
 	defer ticker.Stop()
+	transfersTicker := time.NewTicker(transfersInterval)
+	defer transfersTicker.Stop()
 	last := s.properties()
+	lastTransfers := s.backend.TransfersVersion()
 	for {
 		select {
 		case <-s.stop:
 			return
+		case <-transfersTicker.C:
+			if v := s.backend.TransfersVersion(); v != lastTransfers {
+				lastTransfers = v
+				if err := s.conn.Emit(ObjectPath, Interface+".TransfersChanged"); err != nil {
+					log.Debug().Err(err).Msg("Could not emit D-Bus TransfersChanged signal.")
+				}
+			}
 		case n := <-s.notifyCh:
 			err := s.conn.Emit(ObjectPath, Interface+".Notify", n.Kind, n.Path, n.Message)
 			if err != nil {
@@ -245,6 +261,24 @@ func (m *methods) GetRecent(limit uint32) ([]activity, *dbus.Error) {
 	return out, nil
 }
 
+// transfer is one a(sssttx) element of GetTransfers.
+type transfer struct {
+	Path       string
+	Direction  string
+	State      string
+	BytesDone  uint64
+	BytesTotal uint64
+	QueuedAt   int64
+}
+
+func (m *methods) GetTransfers() ([]transfer, *dbus.Error) {
+	out := []transfer{}
+	for _, t := range m.s.backend.Transfers() {
+		out = append(out, transfer{t.Path, t.Direction, t.State, t.BytesDone, t.BytesTotal, t.QueuedAt})
+	}
+	return out, nil
+}
+
 func (m *methods) GetFileState(path string) (string, bool, *dbus.Error) {
 	rel, derr := m.s.relative(path)
 	if derr != nil {
@@ -341,10 +375,14 @@ func introspectionNode() *introspect.Node {
 					method("SetPinned", arg("path", "s", "in"), arg("pinned", "b", "in")),
 					method("Evict", arg("path", "s", "in")),
 					method("GetWebURL", arg("path", "s", "in"), arg("url", "s", "out")),
+					method("GetTransfers", arg("transfers", "a(sssttx)", "out")),
 				},
-				Signals: []introspect.Signal{{Name: "Notify", Args: []introspect.Arg{
-					arg("kind", "s", ""), arg("path", "s", ""), arg("message", "s", ""),
-				}}},
+				Signals: []introspect.Signal{
+					{Name: "Notify", Args: []introspect.Arg{
+						arg("kind", "s", ""), arg("path", "s", ""), arg("message", "s", ""),
+					}},
+					{Name: "TransfersChanged"},
+				},
 				Properties: []introspect.Property{
 					prop("MountPoint", "s"), prop("Account", "s"), prop("State", "s"),
 					prop("Paused", "b"), prop("PendingUploads", "u"), prop("PendingDownloads", "u"),

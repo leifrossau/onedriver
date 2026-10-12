@@ -663,6 +663,14 @@ func (f *Filesystem) lockDownload(id string) (unlock func(), wait bool) {
 // place instead, so no fd is left open, unless the file got opened meanwhile.
 // The caller must hold the download lock for the ID (see lockDownload).
 func (f *Filesystem) downloadContent(ctx zerolog.Logger, inode *Inode, fd *os.File, remoteHash string) fuse.Status {
+	id := inode.ID()
+	inode.RLock()
+	size := inode.DriveItem.Size
+	inode.RUnlock()
+	path := inode.Path()
+	f.transfers.queue(id, status.DirDownload, path, size)
+	f.transfers.setState(id, status.DirDownload, status.TransferActive)
+	defer f.transfers.remove(id, status.DirDownload)
 	st := f.fetchContent(ctx, inode, fd, remoteHash)
 	if st == fuse.OK {
 		f.recordActivity(inode.Path(), status.ActionDownloaded)
@@ -689,7 +697,10 @@ func (f *Filesystem) fetchContent(ctx zerolog.Logger, inode *Inode, fd *os.File,
 	temp.Truncate(0)
 
 	// replace content only on a match
-	size, err := graph.GetItemContentStream(id, f.auth, temp)
+	counter := &countingWriter{w: temp, report: func(done uint64) {
+		f.transfers.setDone(id, status.DirDownload, done)
+	}}
+	size, err := graph.GetItemContentStream(id, f.auth, counter)
 	if err != nil || remoteHash == "" ||
 		!strings.EqualFold(remoteHash, graph.QuickXORHashStream(temp)) {
 		ctx.Error().Err(err).Msg("Failed to fetch remote content.")

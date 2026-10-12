@@ -125,6 +125,8 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 			// deduplicate sessions for the same item
 			if old, exists := u.sessions[session.ID]; exists {
 				old.cancel(u.auth)
+				// the replacement starts from scratch
+				u.tr().setState(session.ID, status.DirUpload, status.TransferQueued)
 			}
 			contents, _ := json.Marshal(session)
 			u.db.Batch(func(tx *bolt.Tx) error {
@@ -169,6 +171,13 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 						// mark as started synchronously so the next tick
 						// counts it even if the goroutine has not run yet
 						session.setState(uploadStarted, nil)
+						session.progress = func(done uint64) {
+							session.Lock()
+							id := session.ID
+							session.Unlock()
+							u.tr().setDone(id, status.DirUpload, done)
+						}
+						u.tr().setState(session.ID, status.DirUpload, status.TransferActive)
 						go session.Upload(u.auth)
 					}
 
@@ -208,6 +217,7 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 						Err(session).
 						Msg("Upload session failed, will retry from beginning.")
 					session.cancel(u.auth) // cancel large sessions
+					u.tr().setState(session.ID, status.DirUpload, status.TransferRetrying)
 					session.setState(uploadNotStarted, nil)
 
 				case uploadComplete:
@@ -271,8 +281,31 @@ func (u *UploadManager) QueueUpload(inode *Inode) error {
 // queueReservedUpload.
 func (u *UploadManager) reserveUpload(id string) {
 	u.sessionsM.Lock()
-	u.reserved[u.resolveLocked(id)]++
+	id = u.resolveLocked(id)
+	u.reserved[id]++
+	u.tr().queue(id, status.DirUpload, "", 0)
 	u.sessionsM.Unlock()
+}
+
+// tr returns the transfer registry (nil, and thus a no-op, without a
+// filesystem).
+func (u *UploadManager) tr() *transferRegistry {
+	if u.fs == nil {
+		return nil
+	}
+	return u.fs.transfers
+}
+
+// forgetIfIdle drops the transfer entry of an upload that never got a session.
+func (u *UploadManager) forgetIfIdle(id string) {
+	u.sessionsM.RLock()
+	id = u.resolveLocked(id)
+	_, exists := u.sessions[id]
+	idle := !exists && u.reserved[id] == 0
+	u.sessionsM.RUnlock()
+	if idle {
+		u.tr().remove(id, status.DirUpload)
+	}
 }
 
 // queueReservedUpload queues an upload previously reserved under reservedID.
@@ -283,9 +316,11 @@ func (u *UploadManager) queueReservedUpload(inode *Inode, reservedID string) err
 		u.sessionsM.Lock()
 		u.releaseLocked(reservedID)
 		u.sessionsM.Unlock()
+		u.forgetIfIdle(reservedID)
 		return err
 	}
 	session.reservedID = reservedID
+	u.tr().queue(u.resolveID(reservedID), status.DirUpload, session.Name, session.Size)
 	select {
 	case u.queue <- session:
 		return nil
@@ -293,6 +328,7 @@ func (u *UploadManager) queueReservedUpload(inode *Inode, reservedID string) err
 		u.sessionsM.Lock()
 		u.releaseLocked(reservedID)
 		u.sessionsM.Unlock()
+		u.forgetIfIdle(reservedID)
 		return errors.New("filesystem is shutting down")
 	}
 }
@@ -410,6 +446,7 @@ func (u *UploadManager) moveUpload(oldID, newID string) {
 		return
 	}
 	u.aliases[oldID] = idAlias{newID: newID, at: now}
+	u.tr().rekey(oldID, newID, status.DirUpload)
 
 	if n := u.reserved[oldID]; n > 0 {
 		delete(u.reserved, oldID)
@@ -521,6 +558,7 @@ func (u *UploadManager) finishUpload(id string) {
 	u.sessionsM.Lock()
 	delete(u.sessions, id)
 	u.sessionsM.Unlock()
+	u.forgetIfIdle(id)
 }
 
 // sessionState returns the state of the upload session for the given ID, and
