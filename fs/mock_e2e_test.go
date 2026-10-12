@@ -70,8 +70,6 @@ func mountMockAuth(t *testing.T, cacheDir string, auth *graph.Auth, deltaLoop bo
 		MaxBackground: 1024,
 	})
 	require.NoError(t, err)
-	go server.Serve()
-	require.NoError(t, server.WaitMount())
 	// Resolve the initial "token=latest" delta link before returning, so that
 	// every server-side change a test makes after mounting is seen by the
 	// delta loop (otherwise a change made before the loop's first poll would

@@ -2,6 +2,15 @@ package fs
 
 // Test helper process for running external commands.
 //
+// A second hazard this works around: the first time a process opens a regular
+// file on a FUSE mount, Go registers it with epoll, which makes the kernel
+// send a FUSE_POLL request (the kernel stops sending them once it got ENOSYS).
+// If that happens in the test process, the goroutine sits in a raw epoll_ctl
+// syscall that the scheduler cannot preempt, so a garbage collection
+// stop-the-world that starts meanwhile waits for it while the FUSE server (in
+// the same process) cannot run to answer: deadlock. warmMount makes the
+// helper process do that first open for each mount.
+//
 // The fs tests mount real FUSE filesystems served by the test process itself.
 // If the test process forks (exec.Command) while any goroutine holds an open
 // file on such a mount, the forked child (which shares the address space until
@@ -109,6 +118,16 @@ func runnerMain() {
 			daemons[resp.Pid] = cmd
 			dmu.Unlock()
 			go io.Copy(io.Discard, pipe)
+		case "warm":
+			// create + remove a file: epoll registration sends FUSE_POLL
+			name := filepath.Join(req.Dir, ".onedriver-test-warmup")
+			f, err := os.OpenFile(name, os.O_CREATE|os.O_RDWR, 0644)
+			if err != nil {
+				resp.ExitCode, resp.Err = -1, err.Error()
+				break
+			}
+			f.Close()
+			os.Remove(name)
 		case "mount":
 			if err := runnerMount(req); err != nil {
 				resp.ExitCode, resp.Err = -1, err.Error()
@@ -400,7 +419,7 @@ func (r *runnerClient) fdChan(id int64) chan int {
 // mountFuse mounts fsys at mnt like fuse.NewServer does, except that
 // fusermount3 is run by the helper process: forking in this process while
 // other mounts served by it have open files can deadlock (see top of file).
-// Unmount with unmountFuse.
+// The server is already serving when it returns. Unmount with unmountFuse.
 func mountFuse(fsys fuse.RawFileSystem, mnt string, opts *fuse.MountOptions) (*fuse.Server, error) {
 	if runner == nil {
 		return nil, errors.New("test runner not started")
@@ -445,6 +464,14 @@ func mountFuse(fsys fuse.RawFileSystem, mnt string, opts *fuse.MountOptions) (*f
 		syscall.Close(fd)
 		runErr("fusermount3", "-uz", abs)
 		return nil, err
+	}
+	go srv.Serve()
+	if err := srv.WaitMount(); err != nil {
+		return nil, err
+	}
+	// see the top of this file
+	if resp := runner.do(runnerRequest{Op: "warm", Dir: abs}); resp.Err != "" {
+		return nil, errors.New("warming up mount: " + resp.Err)
 	}
 	return srv, nil
 }

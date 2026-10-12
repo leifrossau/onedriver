@@ -156,9 +156,6 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}()
 
-	// mount fs in background thread
-	go server.Serve()
-
 	// cleanup from last run
 	log.Info().Msg("Setup test environment ---------------------------------")
 	if err := os.RemoveAll(TestDir); err != nil {
