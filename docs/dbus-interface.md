@@ -98,6 +98,16 @@ Clients show `Notify` as desktop notifications.
 |---|---|---|
 | `TransfersChanged` | `()` | the result of `GetTransfers` changed (a transfer was added, finished or made progress). Coalesced to at most 4 per second. Clients call `GetTransfers` and `GetRecent` again. |
 
+### File states (v1.3)
+
+| Signal | Signature | Meaning |
+|---|---|---|
+| `FileStatesChanged` | `(as paths)` | the `user.onedriver.state` or `user.onedriver.pinned` of these items changed (paths relative to the mountpoint). Emitted for: download finished (cloud → local), eviction (local → cloud), local write (→ modified), upload queued/started/finished/failed, pin/unpin (for a folder: the folder itself plus the children that are loaded in memory), conflict copy created. Coalesced: at most 4 signals per second, each with up to 500 paths; when more items changed in that interval the signal carries the parent folders instead. |
+
+File managers read the per-file state with the `user.onedriver.state` and
+`user.onedriver.pinned` extended attributes (cheap, no D-Bus round trip per
+file) and listen to `FileStatesChanged` to refresh what is on screen.
+
 ## Activity window
 
 `onedriver-activity` (the popup shown when the tray icon is clicked) owns
