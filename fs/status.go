@@ -34,6 +34,8 @@ type syncControl struct {
 	paused atomic.Bool
 	// wake interrupts the delta loop's sleep (Resume, SyncNow)
 	wake chan struct{}
+	// removes the auth failure subscription, set once by NewFilesystem
+	cancelAuthHook func()
 
 	mu            sync.Mutex
 	lastSync      time.Time

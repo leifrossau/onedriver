@@ -141,7 +141,7 @@ func NewFilesystem(auth *graph.Auth, cacheDir string) *Filesystem {
 		stopCh:        make(chan struct{}),
 		ctl:           newSyncControl(),
 	}
-	auth.OnRenewalFailure(fs.noteAuthFailure)
+	fs.ctl.cancelAuthHook = auth.OnRenewalFailure(fs.noteAuthFailure)
 
 	rootItem, err := graph.GetItem("root", auth)
 	root := NewInodeDriveItem(rootItem)
@@ -248,6 +248,9 @@ func (f *Filesystem) Stop() {
 	}
 	f.stopped = true
 	close(f.stopCh)
+	if f.ctl.cancelAuthHook != nil {
+		f.ctl.cancelAuthHook()
+	}
 	f.stopM.Unlock()
 
 	done := make(chan struct{})
