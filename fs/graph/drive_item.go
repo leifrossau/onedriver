@@ -102,8 +102,13 @@ func (d *DriveItem) IsVault() bool {
 // notebooks. They have no downloadable content and no listable children, so
 // they must never be treated as ordinary files.
 func (d *DriveItem) IsOpaque() bool {
-	return d.File == nil && d.Folder == nil && d.Deleted == nil &&
-		(d.ID != "" || d.IsVault() || d.Package != nil)
+	if d.Deleted != nil {
+		return false
+	}
+	// the vault is opaque even if Graph ever reports it with a folder facet:
+	// listing its children fails while it is locked
+	return d.IsVault() ||
+		(d.File == nil && d.Folder == nil && (d.ID != "" || d.Package != nil))
 }
 
 // ModTimeUnix returns the modification time as a unix uint64 time

@@ -256,12 +256,12 @@ func (i *Inode) Mode() uint32 {
 	i.RLock()
 	defer i.RUnlock()
 	if i.mode == 0 { // only 0 if fetched from Graph API
-		if i.DriveItem.IsDir() {
-			return fuse.S_IFDIR | 0755
-		}
 		if i.DriveItem.IsOpaque() {
 			// Personal Vault, OneNote notebooks...: not a file, see IsOpaque
 			return fuse.S_IFDIR | 0555
+		}
+		if i.DriveItem.IsDir() {
+			return fuse.S_IFDIR | 0755
 		}
 		return fuse.S_IFREG | 0644
 	}
