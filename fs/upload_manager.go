@@ -175,10 +175,13 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 						// Only assign once: a previous attempt's goroutine may
 						// still be running and reading the callback.
 						if session.progress == nil {
+							// own copy: the loop variable is shared between
+							// iterations before Go 1.22
+							s := session
 							session.progress = func(done uint64) {
-								session.Lock()
-								id := session.ID
-								session.Unlock()
+								s.Lock()
+								id := s.ID
+								s.Unlock()
 								u.tr().setDone(id, status.DirUpload, done)
 							}
 						}
