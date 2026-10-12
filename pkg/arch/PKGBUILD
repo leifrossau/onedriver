@@ -7,7 +7,7 @@
 # (or drop "#branch=..." for the default branch).
 
 pkgname=onedriver-fork
-pkgver=0.15.0.4.r59.g4a6231a
+pkgver=0.15.0.4.r60.gf824013
 pkgrel=1
 pkgdesc='Native Linux filesystem for Microsoft OneDrive (fork with tray icon and activity popup)'
 arch=('x86_64')
