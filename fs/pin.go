@@ -575,10 +575,38 @@ func (f *Filesystem) setPinned(inode *Inode, pinned bool) {
 	f.persistInodes(changed)
 
 	id := inode.ID()
+	f.stateChanged(id)
+	if inode.IsDir() {
+		f.noteDescendantsChanged(inode)
+	}
 	log.Info().Str("id", id).Str("path", inode.Path()).Bool("pinned", pinned).
 		Msg("Pin state changed.")
 	if pinned && f.pins != nil {
 		f.pins.enqueue(id)
+	}
+}
+
+// noteDescendantsChanged records every loaded item below a folder as changed
+// (their effective pin state follows the folder). Memory only, bounded by the
+// collector's cap.
+func (f *Filesystem) noteDescendantsChanged(dir *Inode) {
+	dir.RLock()
+	queue := append([]string(nil), dir.children...)
+	dir.RUnlock()
+	seen := make(map[string]bool)
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		f.stateChanged(id)
+		if child := f.GetID(id); child != nil && child.IsDir() {
+			child.RLock()
+			queue = append(queue, child.children...)
+			child.RUnlock()
+		}
 	}
 }
 

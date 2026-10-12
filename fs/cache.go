@@ -31,6 +31,7 @@ type Filesystem struct {
 	uploads   *UploadManager
 	ctl       *syncControl      // pause, activity and error reporting, see status.go
 	transfers *transferRegistry // running and queued transfers, see transfers.go
+	changes   changeSet         // items whose state changed, see changes.go
 
 	sync.RWMutex
 	offline    bool
@@ -143,7 +144,12 @@ func NewFilesystem(auth *graph.Auth, cacheDir string) *Filesystem {
 		ctl:           newSyncControl(),
 		transfers:     &transferRegistry{},
 	}
-	content.onRemove = fs.verifiedForget
+	content.onRemove = func(id string) {
+		fs.verifiedForget(id)
+		if !strings.HasPrefix(id, "temp-") {
+			fs.stateChanged(id)
+		}
+	}
 	fs.ctl.cancelAuthHook = auth.OnRenewalFailure(fs.noteAuthFailure)
 	if auth.Expired() {
 		// started without a login (see graph.Authenticate)
@@ -713,6 +719,7 @@ func (f *Filesystem) moveID(oldID string, newID string) error {
 		return nil
 	}
 	f.content.Move(oldID, newID)
+	f.stateChanged(newID)
 	return nil
 }
 

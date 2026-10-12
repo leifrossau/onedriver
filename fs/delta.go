@@ -217,6 +217,7 @@ func (f *Filesystem) applyDeltaItem(delta *graph.DriveItem) error {
 			Msg("Applying server-side deletion of item.")
 		if local != nil {
 			f.recordActivity(local.Path(), status.ActionDeleted)
+			f.changes.notePath(relPath(local.Path()))
 		}
 		f.DeleteID(id)
 		return nil
@@ -415,6 +416,7 @@ func (f *Filesystem) overwriteFromDelta(local *Inode, delta *graph.DriveItem, id
 		ctx.Debug().Str("delta", "overwrite").Msg("Invalidating cached content.")
 		f.content.Delete(id)
 	}
+	f.stateChanged(local.DriveItem.ID)
 	return true
 }
 
@@ -483,5 +485,6 @@ func (f *Filesystem) createConflictCopy(delta *graph.DriveItem, ctx zerolog.Logg
 		Str("conflictID", item.ID).
 		Msg("Saved server version as conflict copy, uploading it.")
 	f.noteConflict(copyInode.Path())
+	f.stateChanged(item.ID)
 	return f.uploads.QueueUpload(copyInode)
 }

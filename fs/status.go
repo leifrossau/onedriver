@@ -132,6 +132,7 @@ func (f *Filesystem) noteConflict(path string) {
 
 // noteUploadDropped is called when an upload was given up after too many retries.
 func (f *Filesystem) noteUploadDropped(id, path string, cause error) {
+	f.stateChanged(id)
 	msg := "Could not upload " + relPath(path)
 	if cause != nil {
 		msg += ": " + cause.Error()
@@ -146,6 +147,9 @@ func (f *Filesystem) noteUploadDropped(id, path string, cause error) {
 // noteUploadDone is called when an upload finished, which clears the error
 // state of that item.
 func (f *Filesystem) noteUploadDone(ids ...string) {
+	for _, id := range ids {
+		f.stateChanged(id)
+	}
 	f.ctl.mu.Lock()
 	for _, id := range ids {
 		delete(f.ctl.failedUploads, id)
