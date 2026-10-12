@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -45,6 +46,8 @@ type Filesystem struct {
 
 	// remembers which cached content files were hash-verified (id -> verifiedContent)
 	verified sync.Map
+	// number of content hashes computed (test hook, see verified.go)
+	hashCount atomic.Int64
 
 	// open kernel file handles per node ID (Open/Create until Release)
 	openHandlesM sync.Mutex
@@ -58,14 +61,6 @@ type Filesystem struct {
 	stopped bool
 	stopCh  chan struct{}
 	loops   sync.WaitGroup
-}
-
-// verifiedContent records the state of a cache file when its hash was last
-// verified, so unchanged files need not be re-hashed on every open.
-type verifiedContent struct {
-	hash  string
-	size  int64
-	mtime time.Time
 }
 
 // boltdb buckets
@@ -100,6 +95,7 @@ func NewFilesystem(auth *graph.Auth, cacheDir string) *Filesystem {
 	db.Update(func(tx *bolt.Tx) error {
 		tx.CreateBucketIfNotExists(bucketMetadata)
 		tx.CreateBucketIfNotExists(bucketDelta)
+		tx.CreateBucketIfNotExists(bucketVerified)
 		versionBucket, _ := tx.CreateBucketIfNotExists(bucketVersion)
 
 		// migrate old content bucket to the local filesystem
@@ -141,6 +137,7 @@ func NewFilesystem(auth *graph.Auth, cacheDir string) *Filesystem {
 		stopCh:        make(chan struct{}),
 		ctl:           newSyncControl(),
 	}
+	content.onRemove = fs.verifiedForget
 	fs.ctl.cancelAuthHook = auth.OnRenewalFailure(fs.noteAuthFailure)
 
 	rootItem, err := graph.GetItem("root", auth)
@@ -472,6 +469,16 @@ func (f *Filesystem) GetChildrenID(id string, auth *graph.Auth) (map[string]*Ino
 		return children, nil
 	}
 
+	if inode.IsOpaque() {
+		// nothing to list (and the server refuses to list the Personal Vault)
+		inode.Lock()
+		if inode.children == nil {
+			inode.children = []string{}
+		}
+		inode.Unlock()
+		return children, nil
+	}
+
 	// If item.children is not nil, it means we have the item's children
 	// already and can fetch them directly from the cache
 	inode.RLock()
@@ -518,6 +525,15 @@ func (f *Filesystem) GetChildrenID(id string, auth *graph.Auth) (map[string]*Ino
 	for _, item := range fetched {
 		// we will always have an id after fetching from the server
 		child := NewInodeDriveItem(item)
+		if item.IsVault() {
+			log.Info().Str("id", item.ID).Str("name", item.Name).
+				Msg("Item is the locked OneDrive Personal Vault, showing it as an " +
+					"empty read-only directory (it cannot be accessed through the API).")
+		} else if item.IsOpaque() {
+			log.Info().Str("id", item.ID).Str("name", item.Name).
+				Msg("Item is neither a file nor a folder (package?), showing it as an " +
+					"empty read-only directory.")
+		}
 		child.pin = pins[item.ID]
 		f.InsertNodeID(child)
 		f.metadata.Store(child.DriveItem.ID, child)

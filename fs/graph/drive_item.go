@@ -36,6 +36,20 @@ type Folder struct {
 	ChildCount uint32 `json:"childCount,omitempty"`
 }
 
+// Package marks items that are bundles of files treated as one unit (for
+// example OneNote notebooks, type "oneNote").
+// https://learn.microsoft.com/en-us/onedrive/developer/rest-api/resources/package
+type Package struct {
+	Type string `json:"type,omitempty"`
+}
+
+// SpecialFolder marks well-known folders. The Personal Vault is reported
+// with the name "vault".
+// https://learn.microsoft.com/en-us/graph/api/resources/specialfolder
+type SpecialFolder struct {
+	Name string `json:"name,omitempty"`
+}
+
 // Hashes are integrity hashes used to determine if file content has changed.
 // https://docs.microsoft.com/en-us/onedrive/developer/rest-api/resources/hashes
 type Hashes struct {
@@ -65,6 +79,8 @@ type DriveItem struct {
 	Parent           *DriveItemParent `json:"parentReference,omitempty"`
 	Folder           *Folder          `json:"folder,omitempty"`
 	File             *File            `json:"file,omitempty"`
+	Package          *Package         `json:"package,omitempty"`
+	SpecialFolder    *SpecialFolder   `json:"specialFolder,omitempty"`
 	Deleted          *Deleted         `json:"deleted,omitempty"`
 	ConflictBehavior string           `json:"@microsoft.graph.conflictBehavior,omitempty"`
 	ETag             string           `json:"eTag,omitempty"`
@@ -74,6 +90,20 @@ type DriveItem struct {
 // IsDir returns if the DriveItem represents a directory or not
 func (d *DriveItem) IsDir() bool {
 	return d.Folder != nil
+}
+
+// IsVault returns true for the (locked) Personal Vault.
+func (d *DriveItem) IsVault() bool {
+	return d.SpecialFolder != nil && strings.EqualFold(d.SpecialFolder.Name, "vault")
+}
+
+// IsOpaque returns true for server items that are neither a file nor a folder
+// (and are not tombstones): the Personal Vault and packages such as OneNote
+// notebooks. They have no downloadable content and no listable children, so
+// they must never be treated as ordinary files.
+func (d *DriveItem) IsOpaque() bool {
+	return d.File == nil && d.Folder == nil && d.Deleted == nil &&
+		(d.ID != "" || d.IsVault() || d.Package != nil)
 }
 
 // ModTimeUnix returns the modification time as a unix uint64 time
