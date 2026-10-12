@@ -42,7 +42,7 @@ onedriver-tray: $(shell find cmd/onedriver-tray/ -type f)
 
 
 # The activity popup (Qt6/QML/Kirigami) needs cmake and Qt, so it is not part of
-# "all". Build it with "make activity", see activity/README.md.
+# "all". Build it with "make activity", see "Activity window" in the README.
 activity:
 	cmake -S activity -B build/activity -DBUILD_TESTING=ON
 	cmake --build build/activity
