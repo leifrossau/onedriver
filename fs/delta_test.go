@@ -117,7 +117,7 @@ func TestDeltaRename(t *testing.T) {
 	require.Eventually(t, func() bool {
 		item, err = graph.GetItemPath("/onedriver_tests/delta/delta_rename_start", auth)
 		return err == nil
-	}, 10*time.Second, time.Second, "Could not prepare /onedriver_test/delta/delta_rename_start")
+	}, retrySeconds, time.Second, "Could not prepare /onedriver_test/delta/delta_rename_start")
 	inode := NewInodeDriveItem(item)
 
 	require.NoError(t, graph.Rename(inode.ID(), "delta_rename_end", inode.ParentID(), auth))
@@ -148,7 +148,7 @@ func TestDeltaMoveParent(t *testing.T) {
 	require.Eventually(t, func() bool {
 		item, err = graph.GetItemPath("/onedriver_tests/delta/delta_move_start", auth)
 		return err == nil
-	}, 10*time.Second, time.Second)
+	}, retrySeconds, time.Second)
 
 	newParent, err := graph.GetItemPath("/onedriver_tests/", auth)
 	require.NoError(t, err)
