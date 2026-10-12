@@ -14,7 +14,7 @@ CGO_CFLAGS := CGO_CFLAGS=-Wno-deprecated-declarations
 TEST_UID := $(shell whoami)
 GORACE := GORACE="log_path=fusefs_tests.race strip_path_prefix=1"
 
-all: onedriver onedriver-launcher
+all: onedriver onedriver-launcher onedriver-tray
 
 
 onedriver: $(shell find fs/ -type f) cmd/onedriver/main.go
@@ -36,14 +36,23 @@ onedriver-launcher: $(shell find ui/ cmd/common/ -type f) cmd/onedriver-launcher
 		./cmd/onedriver-launcher
 
 
-install: onedriver onedriver-launcher
+# the tray icon is pure Go (no cgo, no GTK)
+onedriver-tray: $(shell find cmd/onedriver-tray/ -type f)
+	CGO_ENABLED=0 go build -v ./cmd/onedriver-tray
+
+
+install: onedriver onedriver-launcher onedriver-tray
 	cp onedriver /usr/bin/
 	cp onedriver-launcher /usr/bin/
+	cp onedriver-tray /usr/bin/
 	mkdir -p /usr/share/icons/onedriver/
 	cp pkg/resources/onedriver.svg /usr/share/icons/onedriver/
 	cp pkg/resources/onedriver.png /usr/share/icons/onedriver/
 	cp pkg/resources/onedriver-128.png /usr/share/icons/onedriver/
 	cp pkg/resources/onedriver-launcher.desktop /usr/share/applications/
+	cp pkg/resources/onedriver-tray.desktop /usr/share/applications/
+	mkdir -p /etc/xdg/autostart/
+	cp pkg/resources/onedriver-tray.desktop /etc/xdg/autostart/
 	cp pkg/resources/onedriver@.service /etc/systemd/user/
 	gzip -c pkg/resources/onedriver.1 > /usr/share/man/man1/onedriver.1.gz
 	mandb
@@ -53,6 +62,9 @@ uninstall:
 	rm -f \
 		/usr/bin/onedriver \
 		/usr/bin/onedriver-launcher \
+		/usr/bin/onedriver-tray \
+		/etc/xdg/autostart/onedriver-tray.desktop \
+		/usr/share/applications/onedriver-tray.desktop \
 		/etc/systemd/user/onedriver@.service \
 		/usr/share/applications/onedriver-launcher.desktop \
 		/usr/share/man/man1/onedriver.1.gz
@@ -131,7 +143,7 @@ test-init: onedriver
 # and is what CI runs. Tests that can only work against the real service are
 # skipped. See "Running tests" in the README.
 test:
-	$(CGO_CFLAGS) go test -count=1 -timeout 300s ./fs/...
+	$(CGO_CFLAGS) go test -count=1 -timeout 300s ./fs/... ./cmd/onedriver-tray/...
 
 
 # Same as "make test", but with the race detector enabled.
@@ -159,5 +171,5 @@ test-live: onedriver onedriver-launcher dmel.fa
 clean:
 	fusermount3 -uz mount/ || true
 	rm -f *.db *.rpm *.deb *.dsc *.changes *.build* *.upload *.xz filelist.txt .commit
-	rm -f *.log *.fa *.gz *.test vgcore.* onedriver onedriver-headless onedriver-launcher .auth_tokens.json
+	rm -f *.log *.fa *.gz *.test vgcore.* onedriver onedriver-headless onedriver-launcher onedriver-tray .auth_tokens.json
 	rm -rf util-linux-*/ onedriver-*/ vendor/ build/

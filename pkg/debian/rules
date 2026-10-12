@@ -21,12 +21,18 @@ override_dh_auto_build:
 	GOCACHE=/tmp/go-cache go build -v -mod=vendor \
 		-ldflags="-X github.com/jstaf/onedriver/cmd/common.commit=$(shell cat .commit)" \
 		./cmd/onedriver-launcher
+	CGO_ENABLED=0 GOCACHE=/tmp/go-cache go build -v -mod=vendor \
+		-ldflags="-X github.com/jstaf/onedriver/cmd/common.commit=$(shell cat .commit)" \
+		./cmd/onedriver-tray
 	gzip pkg/resources/onedriver.1
 
 
 override_dh_auto_install:
 	install -D -m 0755 onedriver $$(pwd)/debian/onedriver/usr/bin/onedriver
 	install -D -m 0755 onedriver-launcher $$(pwd)/debian/onedriver/usr/bin/onedriver-launcher
+	install -D -m 0755 onedriver-tray $$(pwd)/debian/onedriver/usr/bin/onedriver-tray
+	install -D -m 0644 pkg/resources/onedriver-tray.desktop $$(pwd)/debian/onedriver/usr/share/applications/onedriver-tray.desktop
+	install -D -m 0644 pkg/resources/onedriver-tray.desktop $$(pwd)/debian/onedriver/etc/xdg/autostart/onedriver-tray.desktop
 	install -D -m 0644 pkg/resources/onedriver.png $$(pwd)/debian/onedriver/usr/share/icons/onedriver/onedriver.png
 	install -D -m 0644 pkg/resources/onedriver-128.png $$(pwd)/debian/onedriver/usr/share/icons/onedriver/onedriver-128.png
 	install -D -m 0644 pkg/resources/onedriver.svg $$(pwd)/debian/onedriver/usr/share/icons/onedriver/onedriver.svg

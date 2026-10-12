@@ -28,8 +28,10 @@ __debug_bin*
 onedriver
 onedriver-headless
 onedriver-launcher
+onedriver-tray
 onedriver-*/
 !cmd/onedriver-launcher
+!cmd/onedriver-tray
 !cmd/onedriver
 vendor/
 

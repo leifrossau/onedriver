@@ -167,6 +167,19 @@ systemctl --user enable --now $SERVICE_NAME
 journalctl --user -u $SERVICE_NAME --since today
 ```
 
+## Tray icon
+
+`onedriver-tray` shows the state of all running onedriver mounts as a system
+tray icon (StatusNotifierItem, so KDE Plasma and any desktop with a tray
+host work). The icon shows up to date / syncing / paused / offline / error,
+the tooltip lists pending uploads and downloads and the last sync time, and
+the menu offers "Open folder", recent files, "Pause syncing", "Sync now" and
+the quota. Conflicts, failed uploads and expired logins are shown as desktop
+notifications. It talks to onedriver over D-Bus (see
+[docs/dbus-interface.md](docs/dbus-interface.md)), so the mounts have to be
+running; it starts automatically on login after installing the package. To run
+it by hand: `onedriver-tray`.
+
 ## Pinning / free up space
 
 Files are normally only downloaded when you open them. Like "Always keep on
