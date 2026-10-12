@@ -22,7 +22,12 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-const partialTestSize = 20 << 20
+// partialTestSize is the size of the large test files; partialMidSize is used
+// where the size does not matter, to keep the tests fast (under -race).
+const (
+	partialTestSize = 20 << 20
+	partialMidSize  = 8 << 20
+)
 
 // randomContent returns size pseudo-random bytes.
 func randomContent(seed int64, size int) []byte {
@@ -179,7 +184,7 @@ func TestPartialSmallFileFullDownloadOnRead(t *testing.T) {
 func TestPartialCorruptRangeDetected(t *testing.T) {
 	t.Parallel()
 	const remoteDir = "/e2e_partial_corrupt"
-	content := randomContent(4, partialTestSize)
+	content := randomContent(4, partialMidSize)
 	id := mock.PutFile(remoteDir+"/big.bin", content)
 	dir, f := mountMockFS(t, remoteDir)
 	fname := filepath.Join(dir, "big.bin")
@@ -193,7 +198,7 @@ func TestPartialCorruptRangeDetected(t *testing.T) {
 		10*time.Second, 50*time.Millisecond)
 	assert.False(t, f.isPartial(id))
 	assert.True(t, f.verifiedNow(id, remoteHash(f, id)))
-	assert.GreaterOrEqual(t, mock.DownloadedBytes(id), int64(2*partialTestSize),
+	assert.GreaterOrEqual(t, mock.DownloadedBytes(id), int64(2*partialMidSize),
 		"must have been downloaded again in full")
 	cachedContent, ok := cached(f, id)
 	require.True(t, ok)
@@ -209,7 +214,7 @@ func TestPartialCorruptRangeDetected(t *testing.T) {
 func TestPartialWriteDownloadsFirst(t *testing.T) {
 	t.Parallel()
 	const remoteDir = "/e2e_partial_write"
-	content := randomContent(5, partialTestSize)
+	content := randomContent(5, partialMidSize)
 	id := mock.PutFile(remoteDir+"/big.bin", content)
 	dir, f := mountMockFS(t, remoteDir)
 	fname := filepath.Join(dir, "big.bin")
@@ -274,7 +279,7 @@ func TestPartialWriteOpDownloadsFirst(t *testing.T) {
 func TestPartialRemoteChangeInvalidates(t *testing.T) {
 	t.Parallel()
 	const remoteDir = "/e2e_partial_remote"
-	content := randomContent(7, partialTestSize)
+	content := randomContent(7, partialMidSize)
 	id := mock.PutFile(remoteDir+"/big.bin", content)
 	dir, f := mountMockFS(t, remoteDir)
 	fname := filepath.Join(dir, "big.bin")
@@ -283,7 +288,7 @@ func TestPartialRemoteChangeInvalidates(t *testing.T) {
 	_, err := readAt(t, fname, 0, 4096)
 	require.NoError(t, err)
 	oldHash := remoteHash(f, id)
-	v2 := randomContent(8, partialTestSize)
+	v2 := randomContent(8, partialMidSize)
 	mock.Modify(id, v2)
 	require.Eventually(t, func() bool { return remoteHash(f, id) != oldHash },
 		10*time.Second, 50*time.Millisecond)
@@ -300,13 +305,13 @@ func TestPartialRemoteChangeInvalidates(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, v2[1<<20:1<<20+4096], buf)
 	hash2 := remoteHash(f, id)
-	v3 := randomContent(9, partialTestSize)
+	v3 := randomContent(9, partialMidSize)
 	mock.Modify(id, v3)
 	require.Eventually(t, func() bool { return remoteHash(f, id) != hash2 },
 		10*time.Second, 50*time.Millisecond)
-	_, err = fd.ReadAt(buf, 15<<20)
+	_, err = fd.ReadAt(buf, 6<<20)
 	require.NoError(t, err)
-	assert.Equal(t, v3[15<<20:15<<20+4096], buf)
+	assert.Equal(t, v3[6<<20:6<<20+4096], buf)
 	assert.False(t, cachedRanges(f, id).contains(1<<20, 1<<20+4096),
 		"ranges of the old version must be gone")
 }
@@ -315,13 +320,13 @@ func TestPartialRemoteChangeInvalidates(t *testing.T) {
 func TestPartialConcurrentReadsFetchOnce(t *testing.T) {
 	t.Parallel()
 	const remoteDir = "/e2e_partial_concurrent"
-	content := randomContent(10, partialTestSize)
+	content := randomContent(10, partialMidSize)
 	id := mock.PutFile(remoteDir+"/big.bin", content)
 	dir, _ := mountMockFS(t, remoteDir)
 	fname := filepath.Join(dir, "big.bin")
 	mock.SetDownloadDelay(id, 300*time.Millisecond)
 
-	base := int64(12 << 20)
+	base := int64(5 << 20)
 	var wg sync.WaitGroup
 	errs := make([]error, 8)
 	for i := 0; i < 8; i++ {
@@ -370,7 +375,7 @@ func TestPartialConcurrentReadsFetchOnce(t *testing.T) {
 func TestPartialOffline(t *testing.T) {
 	t.Parallel()
 	const remoteDir = "/e2e_partial_offline"
-	content := randomContent(11, partialTestSize)
+	content := randomContent(11, partialMidSize)
 	mock.Mkdir(remoteDir)
 	id := mock.PutFile(remoteDir+"/big.bin", content)
 	cacheDir := filepath.Join(testDBLoc, "e2e_partial_offline")
@@ -393,7 +398,7 @@ func TestPartialOffline(t *testing.T) {
 	got, err := readAt(t, fname, 200<<10, 4096)
 	require.NoError(t, err, "cached range must be readable offline")
 	assert.Equal(t, content[200<<10:200<<10+4096], got)
-	_, err = readAt(t, fname, 15<<20, 4096)
+	_, err = readAt(t, fname, 6<<20, 4096)
 	assert.Error(t, err, "uncached range must fail offline")
 	assert.Equal(t, before, mock.DownloadedBytes(id), "nothing downloaded while offline")
 	assert.Equal(t, "cloud", getState(t, fname))
@@ -403,7 +408,7 @@ func TestPartialOffline(t *testing.T) {
 func TestPartialPinHydrates(t *testing.T) {
 	t.Parallel()
 	const remoteDir = "/e2e_partial_pin"
-	content := randomContent(12, partialTestSize)
+	content := randomContent(12, partialMidSize)
 	id := mock.PutFile(remoteDir+"/big.bin", content)
 	dir, f := mountMockFS(t, remoteDir)
 	fname := filepath.Join(dir, "big.bin")
@@ -427,7 +432,7 @@ func TestPartialPinHydrates(t *testing.T) {
 func TestPartialEvict(t *testing.T) {
 	t.Parallel()
 	const remoteDir = "/e2e_partial_evict"
-	content := randomContent(13, partialTestSize)
+	content := randomContent(13, partialMidSize)
 	id := mock.PutFile(remoteDir+"/big.bin", content)
 	dir, f := mountMockFS(t, remoteDir)
 	fname := filepath.Join(dir, "big.bin")
@@ -452,7 +457,7 @@ func TestPartialEvict(t *testing.T) {
 func TestPartialRangesPersist(t *testing.T) {
 	t.Parallel()
 	const remoteDir = "/e2e_partial_persist"
-	content := randomContent(14, partialTestSize)
+	content := randomContent(14, partialMidSize)
 	mock.Mkdir(remoteDir)
 	id := mock.PutFile(remoteDir+"/big.bin", content)
 	cacheDir := filepath.Join(testDBLoc, "e2e_partial_persist")

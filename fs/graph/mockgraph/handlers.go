@@ -207,6 +207,26 @@ func (s *Server) graph(w http.ResponseWriter, r *http.Request, p string) {
 		if d := s.downloadDelay(id); d > 0 {
 			time.Sleep(d)
 		}
+		// content is immutable once set (setContent replaces the slice), so
+		// it is sent without holding the state lock
+		s.mu.Lock()
+		t := s.parseTarget(rest)
+		if t.suffix == "/content" {
+			if t.node == nil || t.node.dir || t.node.facet != "" {
+				s.mu.Unlock()
+				writeServiceErr(w, errNotFound)
+				return
+			}
+			n, data, p := t.node, t.node.data, s.pathOf(t.node)
+			s.mu.Unlock()
+			if status := s.failDownloadStatus(p); status != 0 {
+				writeErr(w, status, "mockInjectedFailure", "download failure injected by the test")
+				return
+			}
+			s.serveContent(w, r, n.id, data)
+			return
+		}
+		s.mu.Unlock()
 	}
 	if isUpload {
 		// uploads can block on PauseUploads, which must happen without the
@@ -245,7 +265,7 @@ func (s *Server) graph(w http.ResponseWriter, r *http.Request, p string) {
 			writeErr(w, status, "mockInjectedFailure", "download failure injected by the test")
 			return
 		}
-		s.serveContent(w, r, t.node)
+		s.serveContent(w, r, t.node.id, t.node.data)
 
 	case r.Method == http.MethodGet && strings.HasPrefix(t.suffix, "/thumbnails/"):
 		s.thumbnail(w, t)
@@ -309,7 +329,7 @@ func (s *Server) json(n *node, tombstone bool) map[string]interface{} {
 	} else {
 		m["file"] = map[string]interface{}{
 			"mimeType": fileMime(n.name),
-			"hashes":   map[string]interface{}{"quickXorHash": quickXor(n.data)},
+			"hashes":   map[string]interface{}{"quickXorHash": n.quickXor()},
 		}
 	}
 	if n.deleted {
@@ -358,8 +378,7 @@ func (s *Server) listChildren(w http.ResponseWriter, r *http.Request, t target) 
 
 // serveContent serves an item's content, honoring "Range: bytes=a-b" (206
 // with Content-Range) and counting the served bytes.
-func (s *Server) serveContent(w http.ResponseWriter, r *http.Request, n *node) {
-	data := n.data
+func (s *Server) serveContent(w http.ResponseWriter, r *http.Request, id string, data []byte) {
 	status := 200
 	if rng := r.Header.Get("Range"); strings.HasPrefix(rng, "bytes=") {
 		var start, end int
@@ -379,7 +398,7 @@ func (s *Server) serveContent(w http.ResponseWriter, r *http.Request, n *node) {
 		data = data[start : end+1]
 		status = 206
 	}
-	if s.noteDownload(n.id, r.Header.Get("Range"), len(data)) && len(data) > 0 {
+	if s.noteDownload(id, r.Header.Get("Range"), len(data)) && len(data) > 0 {
 		data = append([]byte(nil), data...)
 		data[0] ^= 0xff
 	}

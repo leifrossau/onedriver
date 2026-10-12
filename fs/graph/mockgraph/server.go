@@ -54,6 +54,7 @@ type node struct {
 	seq              int64 // sequence number of the last change, for delta
 	deleted          bool
 	facet            string // "vault" or "package:<type>": neither file nor folder
+	hash             string // cached QuickXorHash of data ("" = not computed yet)
 }
 
 // Server is a fake Microsoft Graph server.
@@ -545,6 +546,7 @@ func (s *Server) putContent(parentID, name string, content []byte, mtime time.Ti
 
 func (s *Server) setContent(n *node, content []byte, mtime time.Time) {
 	n.data = append([]byte(nil), content...)
+	n.hash = ""
 	s.bump(n, true)
 	if !mtime.IsZero() {
 		n.mtime = mtime.UTC()
@@ -632,4 +634,13 @@ func (s *Server) size(n *node) int64 {
 func quickXor(data []byte) string {
 	sum := quickxorhash.Sum(data)
 	return base64.StdEncoding.EncodeToString(sum[:])
+}
+
+// quickXor returns the (cached) QuickXorHash of a node's content. The
+// caller holds the server lock.
+func (n *node) quickXor() string {
+	if n.hash == "" {
+		n.hash = quickXor(n.data)
+	}
+	return n.hash
 }
