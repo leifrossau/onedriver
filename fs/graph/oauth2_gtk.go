@@ -13,6 +13,7 @@ import "C"
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"unsafe"
 
 	"github.com/rs/zerolog/log"
@@ -21,6 +22,7 @@ import (
 // Fetch the auth code required as the first part of oauth2 authentication. Uses
 // webkit2gtk to create a popup browser.
 func getAuthCode(a AuthConfig, accountName string) string {
+	warnMissingGstreamerPlugins()
 	cAuthURL := C.CString(getAuthURL(a))
 	cAccountName := C.CString(accountName)
 	cResponse := C.webkit_auth_window(cAuthURL, cAccountName)
@@ -55,4 +57,20 @@ func uriGetHost(uri string) string {
 		return ""
 	}
 	return C.GoString(host)
+}
+
+// warnMissingGstreamerPlugins warns if GStreamer's autoaudiosink element is
+// missing (gst-plugins-good). Without it, WebKitGTK's web process hits a NULL
+// pointer while setting up the Microsoft login page and the Authenticator
+// number matching code is never shown.
+func warnMissingGstreamerPlugins() {
+	inspect, err := exec.LookPath("gst-inspect-1.0")
+	if err != nil {
+		return // can't tell, don't guess
+	}
+	if exec.Command(inspect, "--exists", "autoaudiosink").Run() != nil {
+		log.Warn().Msg("GStreamer element autoaudiosink not found. The login window " +
+			"may not show the Microsoft Authenticator number. Install gst-plugins-good " +
+			"(gstreamer1.0-plugins-good on Debian/Ubuntu) or use onedriver -n.")
+	}
 }
