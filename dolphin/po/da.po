@@ -1,0 +1,32 @@
+# Danish translation of onedriver-dolphin.
+# SPDX-License-Identifier: GPL-3.0-or-later
+msgid ""
+msgstr ""
+"Project-Id-Version: onedriver-dolphin\n"
+"Language: da\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgctxt "@title:menu"
+msgid "OneDrive"
+msgstr "OneDrive"
+
+msgctxt "@action:inmenu"
+msgid "Always keep on this device"
+msgstr "Behold altid på denne enhed"
+
+msgctxt "@action:inmenu"
+msgid "Free up space"
+msgstr "Frigør plads"
+
+msgctxt "@action:inmenu"
+msgid "View online"
+msgstr "Vis online"
+
+msgctxt "@title:window"
+msgid "OneDrive"
+msgstr "OneDrive"
+
+msgid "Could not get the online address of this item. Is onedriver running and online?"
+msgstr "Kunne ikke hente det online-link til dette element. Kører onedriver, og er den online?"

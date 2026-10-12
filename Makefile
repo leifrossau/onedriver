@@ -66,6 +66,21 @@ install-activity: activity
 	DESTDIR=$(DESTDIR) cmake --install build/activity --prefix $(PREFIX)
 
 
+# The Dolphin integration (KF6 overlay icons + context menu), also not part of
+# "all". See "Dolphin integration" in the README.
+dolphin:
+	cmake -S dolphin -B build/dolphin -DBUILD_TESTING=ON $(CMAKE_FLAGS)
+	cmake --build build/dolphin
+
+
+test-dolphin: dolphin
+	ctest --test-dir build/dolphin --output-on-failure
+
+
+install-dolphin: dolphin
+	DESTDIR=$(DESTDIR) cmake --install build/dolphin --prefix $(PREFIX)
+
+
 install: onedriver onedriver-launcher onedriver-tray
 	install -Dm755 onedriver $(DESTDIR)$(PREFIX)/bin/onedriver
 	install -Dm755 onedriver-launcher $(DESTDIR)$(PREFIX)/bin/onedriver-launcher

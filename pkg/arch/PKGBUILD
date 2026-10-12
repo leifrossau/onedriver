@@ -14,8 +14,9 @@ arch=('x86_64')
 url='https://github.com/leifrossau/onedriver'
 license=('GPL-3.0-or-later')
 depends=('fuse3' 'webkit2gtk-4.1' 'gtk3' 'gst-plugins-good'
-         'qt6-base' 'qt6-declarative' 'kirigami' 'layer-shell-qt' 'qqc2-desktop-style')
-makedepends=('go' 'gcc' 'pkg-config' 'cmake' 'extra-cmake-modules' 'git')
+         'qt6-base' 'qt6-declarative' 'kirigami' 'layer-shell-qt' 'qqc2-desktop-style'
+         'kio')
+makedepends=('go' 'gcc' 'pkg-config' 'cmake' 'extra-cmake-modules' 'ki18n' 'git')
 provides=('onedriver')
 conflicts=('onedriver')
 # $startdir is the directory holding this PKGBUILD; the repo root is two levels up.
@@ -47,7 +48,7 @@ build() {
 
   # the Makefile injects the git commit into the version string via -ldflags
   make onedriver onedriver-launcher onedriver-tray
-  make activity CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr"
+  make activity dolphin CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr"
 }
 
 check() {
@@ -57,11 +58,12 @@ check() {
   # offline tests only; the FUSE e2e tests are not run here
   go test -count=1 ./fs/graph/... ./fs/conflict/ ./cmd/onedriver-tray/...
   QT_QPA_PLATFORM=offscreen ctest --test-dir build/activity --output-on-failure
+  QT_QPA_PLATFORM=offscreen ctest --test-dir build/dolphin --output-on-failure
 }
 
 package() {
   cd onedriver
-  make install install-activity \
+  make install install-activity install-dolphin \
     DESTDIR="${pkgdir}" PREFIX=/usr SYSCONFDIR=/etc SYSTEMDUSERDIR=/usr/lib/systemd/user
   install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 }
