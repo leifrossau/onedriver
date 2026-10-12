@@ -44,11 +44,6 @@ func (i *Inode) setContent(f *Filesystem, newContent []byte) {
 // second inode from the delta and the later MoveID(local -> remote) clobbers
 // it, leaving the file under its old name locally (see
 // TestDeltaRenameWhileUploadCompletes).
-//
-// BUG: rewriting a file while its previous upload session is started or
-// complete-but-unnoticed replaces the session in UploadManager.sessions without
-// decrementing UploadManager.inFlight, so the slot leaks (see
-// TestUploadManagerInFlightLeak).
 func waitForRemoteID(t *testing.T, path string) {
 	t.Helper()
 	require.Eventually(t, func() bool {

@@ -22,7 +22,6 @@ type UploadManager struct {
 	queue         chan *UploadSession
 	deletionQueue chan string
 	sessions      map[string]*UploadSession
-	inFlight      uint8 // number of sessions in flight
 	auth          *graph.Auth
 	fs            *Filesystem
 	db            *bolt.DB
@@ -64,9 +63,6 @@ func NewUploadManager(duration time.Duration, db *bolt.DB, fs *Filesystem, auth 
 				log.Error().Err(err).Msg("Failure restoring upload sessions from disk.")
 				return err
 			}
-			if session.getState() != uploadNotStarted {
-				manager.inFlight++
-			}
 			session.cancel(auth) // uploads are currently non-resumable
 			manager.sessions[session.ID] = session
 			manager.recordHashLocked(session.ID, session.QuickXORHash)
@@ -106,14 +102,26 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 			u.finishUpload(cancelID)
 
 		case <-ticker.C: // periodically start uploads, or remove them if done/failed
+			// The number of uploads in flight is derived from session states
+			// on every tick instead of being tracked with a counter, so it
+			// cannot drift when sessions are retried, replaced or dropped.
+			inFlight := 0
+			for _, session := range u.sessions {
+				if session.getState() == uploadStarted {
+					inFlight++
+				}
+			}
 			for _, session := range u.sessions {
 				switch session.getState() {
 				case uploadNotStarted:
 					// max active upload sessions are capped at this limit for faster
 					// uploads of individual files and also to prevent possible server-
 					// side throttling that can cause errors.
-					if u.inFlight < maxUploadsInFlight {
-						u.inFlight++
+					if inFlight < maxUploadsInFlight {
+						inFlight++
+						// mark as started synchronously so the next tick
+						// counts it even if the goroutine has not run yet
+						session.setState(uploadStarted, nil)
 						go session.Upload(u.auth)
 					}
 
@@ -125,8 +133,25 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 							Str("name", session.Name).
 							Err(session).
 							Int("retries", session.retries).
-							Msg("Upload session failed too many times, cancelling session.")
+							Msg("Upload session failed too many times and was dropped. " +
+								"Local changes were NOT uploaded to OneDrive; the file is kept " +
+								"marked as modified and will be uploaded the next time it is saved.")
 						u.finishUpload(session.ID)
+						// Do not leave the inode looking clean: hasChanges was
+						// cleared when the upload was queued, and with the
+						// session gone IsUploadPending is false too, so delta
+						// would overwrite the unuploaded local content with the
+						// server's copy. Re-mark it as modified instead.
+						inode := u.fs.GetID(session.OldID)
+						if inode == nil {
+							inode = u.fs.GetID(session.ID)
+						}
+						if inode != nil {
+							inode.Lock()
+							inode.hasChanges = true
+							inode.Unlock()
+						}
+						continue
 					}
 
 					log.Warn().
@@ -289,9 +314,6 @@ func (u *UploadManager) finishUpload(id string) {
 		}
 		return nil
 	})
-	if u.inFlight > 0 {
-		u.inFlight--
-	}
 	u.sessionsM.Lock()
 	delete(u.sessions, id)
 	u.sessionsM.Unlock()
