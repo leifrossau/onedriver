@@ -353,8 +353,8 @@ func (t *Tray) showActivity() bool {
 	if _, err := t.opts.LookPath(activityBin); err != nil {
 		return false
 	}
-	// onedriver-activity shows its window when it starts
-	t.opts.Run(activityBin)
+	// without --show onedriver-activity starts hidden
+	t.opts.Run(activityBin, "--show")
 	return true
 }
 

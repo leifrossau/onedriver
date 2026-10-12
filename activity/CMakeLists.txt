@@ -11,7 +11,10 @@ find_package(KF6Kirigami REQUIRED)
 # window is placed bottom-right with plain Qt, which only works on X11.
 find_package(LayerShellQt QUIET)
 
-qt_standard_project_setup()
+qt_standard_project_setup(REQUIRES 6.5)
+# Put QML modules under qrc:/qt/qml, the default import path, so the installed
+# binary finds its own QML (the build tree only worked through files on disk).
+qt_policy(SET QTP0001 NEW)
 
 # everything except main(), shared with the tests
 add_library(activity-core STATIC

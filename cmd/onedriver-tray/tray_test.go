@@ -317,14 +317,14 @@ func TestActivityToggleAndStart(t *testing.T) {
 	// not running, installed: started
 	e.installed.Store(true)
 	activate()
-	expectRun("onedriver-activity")
+	expectRun("onedriver-activity", "--show")
 
 	// the menu item does the same
 	menu := e.client.Object(e.tray.sni.busName, menuPath)
 	id, ok := e.layout(t).find(t, "Show activity")
 	require.True(t, ok)
 	require.NoError(t, menu.Call(menuIface+".Event", 0, id, "clicked", dbus.MakeVariant(""), uint32(0)).Err)
-	expectRun("onedriver-activity")
+	expectRun("onedriver-activity", "--show")
 
 	// running: Toggle is called, nothing is started
 	act := &fakeActivity{toggles: make(chan struct{}, 4)}
