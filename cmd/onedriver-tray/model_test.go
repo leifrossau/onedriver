@@ -99,8 +99,10 @@ func TestMenuSingleInstance(t *testing.T) {
 		Recent: []RecentItem{{"docs/a.txt", 1, "uploaded"}, {"old.txt", 2, "deleted"}}}
 	m := BuildMenu([]Instance{i})
 	idx := AssignIDs(m)
-	assert.Equal(t, "/home/u/OneDrive - u@x.y", m[0].Label)
-	assert.True(t, m[0].Disabled)
+	assert.Equal(t, "Show activity", m[0].Label)
+	assert.Equal(t, ActActivity, m[0].Action.Kind)
+	assert.Equal(t, "/home/u/OneDrive - u@x.y", m[1].Label)
+	assert.True(t, m[1].Disabled)
 	assert.NotNil(t, find(m, "Syncing: 3 uploads, 2 downloads"))
 	assert.NotNil(t, find(m, "Used 1.0 GiB of 5.0 GiB"))
 	assert.Equal(t, &Action{ActOpenFolder, "x.A", "/home/u/OneDrive"}, find(m, "Open folder").Action)
@@ -125,9 +127,9 @@ func TestMenuMultipleInstances(t *testing.T) {
 		{BusName: "b", MountPoint: "/b", State: "idle"},
 		{BusName: "a", MountPoint: "/a", State: "offline"},
 	})
-	assert.Equal(t, []string{"/a - Offline", "/b - Up to date", "---", "Settings…", "Quit tray"}, labels(m))
-	assert.NotNil(t, find(m[0].Children, "Open folder"))
-	assert.Equal(t, "a", find(m[0].Children, "Sync now").Action.Instance)
+	assert.Equal(t, []string{"Show activity", "/a - Offline", "/b - Up to date", "---", "Settings…", "Quit tray"}, labels(m))
+	assert.NotNil(t, find(m[1].Children, "Open folder"))
+	assert.Equal(t, "a", find(m[1].Children, "Sync now").Action.Instance)
 }
 
 func TestComposeCoalesces(t *testing.T) {

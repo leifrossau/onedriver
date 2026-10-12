@@ -5,6 +5,7 @@ package fs
 
 import (
 	"bufio"
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -209,4 +210,120 @@ wait:
 	assert.NotEmpty(t, notify.Body[2])
 	require.NoError(t, call("GetRecent", uint32(5)).Store(&recent))
 	assert.Equal(t, "conflict", recent[0].Action)
+}
+
+type xfer struct {
+	Path       string
+	Direction  string
+	State      string
+	BytesDone  uint64
+	BytesTotal uint64
+	QueuedAt   int64
+}
+
+func TestDBusTransfers(t *testing.T) {
+	t.Parallel()
+	const remoteDir = "/e2e_dbus_xfer"
+	if mock == nil {
+		t.Skip("needs the mock Graph server")
+	}
+	addr := startPrivateBus(t)
+	dir, cache := mountMockFS(t, remoteDir)
+	mnt := strings.TrimSuffix(dir, remoteDir)
+	svc, err := onedriverdbus.Start(busConn(t, addr), mnt, cache)
+	require.NoError(t, err)
+	t.Cleanup(svc.Close)
+
+	client := busConn(t, addr)
+	obj := client.Object(svc.Name(), onedriverdbus.ObjectPath)
+	transfers := func() []xfer {
+		var out []xfer
+		require.NoError(t, obj.Call(onedriverdbus.Interface+".GetTransfers", 0).Store(&out))
+		return out
+	}
+	find := func(path, dir string) (xfer, bool) {
+		for _, x := range transfers() {
+			if x.Path == path && x.Direction == dir {
+				return x, true
+			}
+		}
+		return xfer{}, false
+	}
+	require.NoError(t, client.AddMatchSignal(
+		dbus.WithMatchInterface(onedriverdbus.Interface), dbus.WithMatchMember("TransfersChanged")))
+	signals := make(chan *dbus.Signal, 256)
+	client.Signal(signals)
+
+	assert.Empty(t, transfers())
+
+	// upload: large enough for a chunked upload session
+	mock.PauseUploads(remoteDir)
+	defer mock.ResumeUploads(remoteDir)
+	big := bytes.Repeat([]byte("0123456789abcdef"), 12*1024*1024/16)
+	rel := "e2e_dbus_xfer/big.bin"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "big.bin"), big, 0644))
+	require.Eventually(t, func() bool {
+		x, ok := find(rel, "upload")
+		return ok && x.State == "active"
+	}, 20*time.Second, 100*time.Millisecond)
+	x, _ := find(rel, "upload")
+	assert.Equal(t, uint64(len(big)), x.BytesTotal)
+	assert.LessOrEqual(t, x.BytesDone, x.BytesTotal)
+	assert.NotZero(t, x.QueuedAt)
+
+	select {
+	case sig := <-signals:
+		assert.Equal(t, onedriverdbus.Interface+".TransfersChanged", sig.Name)
+	case <-time.After(5 * time.Second):
+		t.Fatal("no TransfersChanged signal")
+	}
+
+	mock.ResumeUploads(remoteDir)
+	require.Eventually(t, func() bool {
+		_, ok := find(rel, "upload")
+		return !ok
+	}, 60*time.Second, 100*time.Millisecond, "finished upload must disappear")
+	data, ok := mock.ContentPath(remoteDir + "/big.bin")
+	require.True(t, ok)
+	assert.Equal(t, big, data)
+	var recent []struct {
+		Path   string
+		Time   int64
+		Action string
+	}
+	require.NoError(t, obj.Call(onedriverdbus.Interface+".GetRecent", 0, uint32(10)).Store(&recent))
+	found := false
+	for _, r := range recent {
+		found = found || (r.Path == rel && r.Action == "uploaded")
+	}
+	assert.True(t, found, "%v", recent)
+
+	// download: a pinned file whose download fails is listed as waiting
+	mock.PutFile(remoteDir+"/pinned.bin", bytes.Repeat([]byte("x"), 100000))
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(filepath.Join(dir, "pinned.bin"))
+		return err == nil
+	}, 20*time.Second, 100*time.Millisecond)
+	mock.FailDownloads(remoteDir, 500)
+	defer mock.StopFailingDownloads(remoteDir)
+	pinnedRel := "e2e_dbus_xfer/pinned.bin"
+	require.NoError(t, obj.Call(onedriverdbus.Interface+".SetPinned", 0, pinnedRel, true).Err)
+	require.Eventually(t, func() bool {
+		_, ok := find(pinnedRel, "download")
+		return ok
+	}, 20*time.Second, 50*time.Millisecond, "pinned download must be listed")
+	x, _ = find(pinnedRel, "download")
+	assert.Equal(t, uint64(100000), x.BytesTotal)
+
+	mock.StopFailingDownloads(remoteDir)
+	require.Eventually(t, func() bool {
+		_, ok := find(pinnedRel, "download")
+		return !ok
+	}, 90*time.Second, 200*time.Millisecond, "hydrated file must leave the list")
+	require.NoError(t, obj.Call(onedriverdbus.Interface+".GetRecent", 0, uint32(10)).Store(&recent))
+	found = false
+	for _, r := range recent {
+		found = found || (r.Path == pinnedRel && r.Action == "downloaded")
+	}
+	assert.True(t, found, "%v", recent)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -17,7 +18,12 @@ const (
 	mountIface  = "io.github.onedriver.Mount1"
 	propsIface  = "org.freedesktop.DBus.Properties"
 	callTimeout = 3 * time.Second
-	recentLimit = 10
+
+	activityName  = "io.github.onedriver.Activity"
+	activityObj   = dbus.ObjectPath("/io/github/onedriver/Activity")
+	activityIface = "io.github.onedriver.Activity1"
+	activityBin   = "onedriver-activity"
+	recentLimit   = 10
 )
 
 // Options configures a Tray. The zero value is fine for production use.
@@ -25,6 +31,9 @@ type Options struct {
 	// Run starts an external program (xdg-open, onedriver-launcher). Tests
 	// replace it.
 	Run func(name string, args ...string)
+	// LookPath finds a program in $PATH (exec.LookPath by default). Tests
+	// replace it.
+	LookPath func(name string) (string, error)
 	// NotifyWindow is how long Notify signals are collected before one
 	// notification (or a summary) is shown.
 	NotifyWindow time.Duration
@@ -54,6 +63,9 @@ type Tray struct {
 func NewTray(conn *dbus.Conn, opts Options) (*Tray, error) {
 	if opts.Run == nil {
 		opts.Run = runDetached
+	}
+	if opts.LookPath == nil {
+		opts.LookPath = exec.LookPath
 	}
 	if opts.NotifyWindow == 0 {
 		opts.NotifyWindow = 1500 * time.Millisecond
@@ -301,13 +313,49 @@ func (t *Tray) rebuild() {
 	}
 }
 
+// activate is the left click: toggle the activity window, starting
+// onedriver-activity if it is not running, and fall back to opening the first
+// instance's folder if it is not installed.
 func (t *Tray) activate() {
+	if t.showActivity() {
+		return
+	}
+	t.activateFallback()
+}
+
+// activateFallback opens the first instance's folder, or the settings if
+// nothing is running.
+func (t *Tray) activateFallback() {
 	insts := t.Instances()
 	if len(insts) == 0 {
 		t.Do(Action{Kind: ActSettings})
 		return
 	}
 	t.Do(Action{Kind: ActOpenFolder, Arg: insts[0].MountPoint})
+}
+
+// showActivity toggles the activity window. It returns false if there is no
+// activity window to show (the program is not installed or could not be
+// reached).
+func (t *Tray) showActivity() bool {
+	c, cancel := ctx()
+	defer cancel()
+	var hasOwner bool
+	err := t.conn.BusObject().CallWithContext(c, "org.freedesktop.DBus.NameHasOwner", 0, activityName).Store(&hasOwner)
+	if err == nil && hasOwner {
+		err = t.conn.Object(activityName, activityObj).CallWithContext(c, activityIface+".Toggle", 0).Err
+		if err != nil {
+			log.Warn().Err(err).Msg("Could not toggle the activity window.")
+			return false
+		}
+		return true
+	}
+	if _, err := t.opts.LookPath(activityBin); err != nil {
+		return false
+	}
+	// onedriver-activity shows its window when it starts
+	t.opts.Run(activityBin)
+	return true
 }
 
 // Do performs a menu action.
@@ -317,6 +365,10 @@ func (t *Tray) Do(a Action) {
 		t.opts.Run("xdg-open", a.Arg)
 	case ActSettings:
 		t.opts.Run("onedriver-launcher")
+	case ActActivity:
+		if !t.showActivity() {
+			t.activateFallback()
+		}
 	case ActQuit:
 		t.Quit()
 	case ActPause, ActResume, ActSyncNow:

@@ -204,6 +204,7 @@ const (
 	ActResume     = "resume"
 	ActSyncNow    = "sync"
 	ActSettings   = "settings"
+	ActActivity   = "activity"
 	ActQuit       = "quit"
 )
 
@@ -271,6 +272,12 @@ func instanceItems(i Instance) []*MenuItem {
 	return m
 }
 
+func activityItem() *MenuItem {
+	it := item("Show activity", &Action{Kind: ActActivity})
+	it.Icon = "view-list-details"
+	return it
+}
+
 // BuildMenu builds the tray menu: one flat section for a single instance, one
 // submenu per instance for several, plus the global entries.
 func BuildMenu(insts []Instance) []*MenuItem {
@@ -281,8 +288,10 @@ func BuildMenu(insts []Instance) []*MenuItem {
 		m = append(m, info("onedriver is not running"),
 			item("Open onedriver settings", &Action{Kind: ActSettings}))
 	case 1:
+		m = append(m, activityItem())
 		m = append(m, instanceItems(insts[0])...)
 	default:
+		m = append(m, activityItem())
 		for _, i := range insts {
 			m = append(m, &MenuItem{
 				Label:    fmt.Sprintf("%s - %s", i.MountPoint, StatusLine(i)),

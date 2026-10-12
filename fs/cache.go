@@ -29,7 +29,8 @@ type Filesystem struct {
 	root      string // the id of the filesystem's root item
 	deltaLink string
 	uploads   *UploadManager
-	ctl       *syncControl // pause, activity and error reporting, see status.go
+	ctl       *syncControl      // pause, activity and error reporting, see status.go
+	transfers *transferRegistry // running and queued transfers, see transfers.go
 
 	sync.RWMutex
 	offline    bool
@@ -140,6 +141,7 @@ func NewFilesystem(auth *graph.Auth, cacheDir string) *Filesystem {
 		openHandles:   make(map[uint64]int),
 		stopCh:        make(chan struct{}),
 		ctl:           newSyncControl(),
+		transfers:     &transferRegistry{},
 	}
 	content.onRemove = fs.verifiedForget
 	fs.ctl.cancelAuthHook = auth.OnRenewalFailure(fs.noteAuthFailure)

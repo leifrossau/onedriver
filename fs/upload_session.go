@@ -51,7 +51,8 @@ type UploadSession struct {
 	QuickXORHash       string    `json:"quickxorhash,omitempty"`
 	ModTime            time.Time `json:"modTime,omitempty"`
 	retries            int
-	reservedID         string // ID reserved via UploadManager.reserveUpload
+	reservedID         string            // ID reserved via UploadManager.reserveUpload
+	progress           func(done uint64) // reports uploaded bytes, may be nil
 
 	sync.Mutex
 	UploadURL string `json:"uploadUrl"`
@@ -200,6 +201,9 @@ func (u *UploadSession) uploadChunk(auth *graph.Auth, offset uint64) ([]byte, in
 	}
 	defer resp.Body.Close()
 	response, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 300 && u.progress != nil {
+		u.progress(end)
+	}
 	return response, resp.StatusCode, nil
 }
 
