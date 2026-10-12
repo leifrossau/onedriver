@@ -21,6 +21,15 @@ import (
 // the user shuts down their computer.
 func TestUploadDiskSerialization(t *testing.T) {
 	t.Parallel()
+	if mock != nil {
+		// Hold uploads at the server so the file cannot be uploaded before we
+		// cancel it, no matter how fast the (mock) server is. Note the already
+		// started upload goroutine of the canceled session stays blocked too
+		// and will still land once uploads resume, so the final check below
+		// is weaker than against a live server.
+		mock.PauseUploads("/onedriver_tests/upload_to_disk.fa")
+		defer mock.ResumeUploads("/onedriver_tests/upload_to_disk.fa")
+	}
 	// write a file and get its id - we do this as a goroutine because uploads are
 	// blocking now
 	go exec.Command("cp", "dmel.fa", filepath.Join(TestDir, "upload_to_disk.fa")).Run()
@@ -68,6 +77,9 @@ func TestUploadDiskSerialization(t *testing.T) {
 	})
 
 	NewUploadManager(time.Second, db, fs, auth)
+	if mock != nil {
+		mock.ResumeUploads("/onedriver_tests/upload_to_disk.fa")
+	}
 	assert.Eventually(t, func() bool {
 		driveItem, err = graph.GetItemPath("/onedriver_tests/upload_to_disk.fa", auth)
 		if driveItem != nil && err == nil {

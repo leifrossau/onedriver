@@ -69,7 +69,7 @@ func TestDeltaRmdir(t *testing.T) {
 	// wait for delta sync
 	assert.Eventually(t, func() bool {
 		_, err := os.Stat(fname)
-		return err == nil
+		return err != nil
 	}, retrySeconds, time.Second, "File deletion not picked up by client")
 }
 

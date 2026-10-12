@@ -1,7 +1,9 @@
 package fs
 
 import (
+	"bytes"
 	"fmt"
+	"math/rand"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/jstaf/onedriver/fs/graph"
+	"github.com/jstaf/onedriver/fs/graph/mockgraph"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -30,7 +33,43 @@ const (
 var (
 	auth *graph.Auth
 	fs   *Filesystem
+
+	// mock is the fake Microsoft Graph server the tests run against, unless
+	// ONEDRIVER_TEST_LIVE=1 is set (in which case it is nil).
+	mock *mockgraph.Server
 )
+
+// newMockAuth returns credentials the mock server accepts. They expire far in
+// the future so no token refresh (or login window) is ever attempted.
+func newMockAuth(srv *mockgraph.Server) *graph.Auth {
+	return &graph.Auth{
+		AuthConfig:   graph.AuthConfig{TokenURL: srv.TokenURL()},
+		Account:      mockgraph.Account,
+		AccessToken:  mockgraph.AccessToken,
+		RefreshToken: mockgraph.RefreshToken,
+		ExpiresAt:    time.Now().Add(10 * 365 * 24 * time.Hour).Unix(),
+	}
+}
+
+// writeFastaFixture creates a synthetic stand-in for dmel.fa (a ~12MB FASTA
+// file, which is larger than one upload chunk) with the same header and final
+// line the real file has.
+func writeFastaFixture(name string) error {
+	const lineLen = 60
+	rng := rand.New(rand.NewSource(1))
+	var buf bytes.Buffer
+	buf.WriteString(">X dna:chromosome chromosome:BDGP6.22:X:1:23542271:1 REF\n")
+	line := make([]byte, lineLen+1)
+	line[lineLen] = '\n'
+	for buf.Len() < 12*1024*1024 {
+		for i := 0; i < lineLen; i++ {
+			line[i] = "ACGT"[rng.Intn(4)]
+		}
+		buf.Write(line)
+	}
+	buf.WriteString("AAATAAAATAC\n")
+	return os.WriteFile(name, buf.Bytes(), 0644)
+}
 
 // Tests are done in the main project directory with a mounted filesystem to
 // avoid having to repeatedly recreate auth_tokens.json and juggle multiple auth
@@ -44,7 +83,28 @@ func TestMain(m *testing.M) {
 		}
 	}
 
-	os.Chdir("..")
+	live := mockgraph.Live()
+	var workDir string
+	if live {
+		os.Chdir("..")
+	} else {
+		// Run in a scratch directory so the mount, caches and logs never touch
+		// the source tree.
+		mock = mockgraph.New()
+		defer mock.Close()
+		graph.GraphURL = mock.GraphURL()
+		var err error
+		workDir, err = os.MkdirTemp("", "onedriver-fs-test-")
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		os.Chdir(workDir)
+		if err := writeFastaFixture("dmel.fa"); err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+	}
 	// attempt to unmount regardless of what happens (in case previous tests
 	// failed and didn't clean themselves up)
 	exec.Command("fusermount3", "-uz", mountLoc).Run()
@@ -58,7 +118,11 @@ func TestMain(m *testing.M) {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: f, TimeFormat: "15:04:05"})
 	defer f.Close()
 
-	auth = graph.Authenticate(graph.AuthConfig{}, ".auth_tokens.json", false)
+	if live {
+		auth = graph.Authenticate(graph.AuthConfig{}, ".auth_tokens.json", false)
+	} else {
+		auth = newMockAuth(mock)
+	}
 	fs = NewFilesystem(auth, filepath.Join(testDBLoc, "test"))
 	server, _ := fuse.NewServer(
 		fs,
@@ -91,7 +155,13 @@ func TestMain(m *testing.M) {
 	// create paging test files before the delta thread is created
 	if !singleTest {
 		os.Mkdir(filepath.Join(TestDir, "paging"), 0755)
-		createPagingTestFiles()
+		if live {
+			createPagingTestFiles()
+		} else {
+			for i := 0; i < 250; i++ {
+				mock.PutFile(fmt.Sprintf("/onedriver_tests/paging/%d.txt", i), []byte("test\n"))
+			}
+		}
 	}
 	go fs.DeltaLoop(5 * time.Second)
 
@@ -119,6 +189,15 @@ func TestMain(m *testing.M) {
 		exec.Command("fusermount3", "-zu", "mount").Run()
 	}
 	fmt.Println("Successfully unmounted fuse server!")
+	if !live {
+		mock.Close()
+		if code == 0 {
+			os.Chdir("/")
+			os.RemoveAll(workDir)
+		} else {
+			fmt.Println("Test logs and caches kept in", workDir)
+		}
+	}
 	os.Exit(code)
 }
 
