@@ -4,7 +4,6 @@ package fs
 // server, on a private bus (the user's session bus is never touched).
 
 import (
-	"bufio"
 	"bytes"
 	"os"
 	"os/exec"
@@ -26,16 +25,9 @@ func startPrivateBus(t *testing.T) string {
 	if err != nil {
 		t.Skip("dbus-daemon is not installed")
 	}
-	cmd := exec.Command(path, "--session", "--print-address", "--nofork")
-	out, err := cmd.StdoutPipe()
+	addr, stop, err := startDaemon(path, "--session", "--print-address", "--nofork")
 	require.NoError(t, err)
-	require.NoError(t, cmd.Start())
-	t.Cleanup(func() {
-		cmd.Process.Kill()
-		cmd.Wait()
-	})
-	addr, err := bufio.NewReader(out).ReadString('\n')
-	require.NoError(t, err)
+	t.Cleanup(stop)
 	return strings.TrimSpace(addr)
 }
 

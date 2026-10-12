@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -75,6 +74,10 @@ func writeFastaFixture(name string) error {
 // avoid having to repeatedly recreate auth_tokens.json and juggle multiple auth
 // sessions.
 func TestMain(m *testing.M) {
+	if os.Getenv(runnerEnv) == "1" {
+		runnerMain()
+		os.Exit(0)
+	}
 	// determine if we're running a single test in vscode or something
 	var singleTest bool
 	for _, arg := range os.Args {
@@ -107,7 +110,12 @@ func TestMain(m *testing.M) {
 	}
 	// attempt to unmount regardless of what happens (in case previous tests
 	// failed and didn't clean themselves up)
-	exec.Command("fusermount3", "-uz", mountLoc).Run()
+	// helper process for running external commands; must start before anything is mounted
+	if err := startRunner(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	runErr("fusermount3", "-uz", mountLoc)
 	os.Mkdir(mountLoc, 0755)
 	// wipe all cached data from previous tests
 	os.RemoveAll(testDBLoc)
@@ -124,7 +132,7 @@ func TestMain(m *testing.M) {
 		auth = newMockAuth(mock)
 	}
 	fs = NewFilesystem(auth, filepath.Join(testDBLoc, "test"))
-	server, _ := fuse.NewServer(
+	server, merr := mountFuse(
 		fs,
 		mountLoc,
 		&fuse.MountOptions{
@@ -134,14 +142,19 @@ func TestMain(m *testing.M) {
 			MaxBackground: 1024,
 		},
 	)
+	if merr != nil {
+		fmt.Println("mount failed:", merr)
+		os.Exit(1)
+	}
 
 	// setup sigint handler for graceful unmount on interrupt/terminate
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGABRT)
-	go UnmountHandler(sigChan, server)
-
-	// mount fs in background thread
-	go server.Serve()
+	go func() {
+		<-sigChan
+		unmountFuse(server, mountLoc)
+		os.Exit(1)
+	}()
 
 	// cleanup from last run
 	log.Info().Msg("Setup test environment ---------------------------------")
@@ -184,11 +197,11 @@ func TestMain(m *testing.M) {
 	fmt.Printf("\n")
 
 	// unmount
-	if server.Unmount() != nil {
-		log.Error().Msg("Failed to unmount test fuse server, attempting lazy unmount")
-		exec.Command("fusermount3", "-zu", "mount").Run()
+	if unmountFuse(server, mountLoc) != nil {
+		log.Error().Msg("Failed to unmount test fuse server, attempted lazy unmount")
 	}
 	fmt.Println("Successfully unmounted fuse server!")
+	stopRunner()
 	if !live {
 		mock.Close()
 		if code == 0 {

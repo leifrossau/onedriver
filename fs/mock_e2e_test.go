@@ -8,7 +8,6 @@ package fs
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -65,14 +64,12 @@ func mountMockAuth(t *testing.T, cacheDir string, auth *graph.Auth, deltaLoop bo
 	mnt, err := os.MkdirTemp("", "onedriver-e2e-mount-")
 	require.NoError(t, err)
 	cache := NewFilesystem(auth, cacheDir)
-	server, err := fuse.NewServer(cache, mnt, &fuse.MountOptions{
+	server, err := mountFuse(cache, mnt, &fuse.MountOptions{
 		Name:          "onedriver",
 		FsName:        "onedriver",
 		MaxBackground: 1024,
 	})
 	require.NoError(t, err)
-	go server.Serve()
-	require.NoError(t, server.WaitMount())
 	// Resolve the initial "token=latest" delta link before returning, so that
 	// every server-side change a test makes after mounting is seen by the
 	// delta loop (otherwise a change made before the loop's first poll would
@@ -86,9 +83,7 @@ func mountMockAuth(t *testing.T, cacheDir string, auth *graph.Auth, deltaLoop bo
 	var once sync.Once
 	return mnt, cache, func() {
 		once.Do(func() {
-			if server.Unmount() != nil {
-				exec.Command("fusermount3", "-zu", mnt).Run()
-			}
+			unmountFuse(server, mnt)
 			cache.Stop()
 			os.Remove(mnt)
 		})
