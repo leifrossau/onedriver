@@ -132,6 +132,9 @@ func TestReadWrite(t *testing.T) {
 // empty file
 func TestWriteOffset(t *testing.T) {
 	t.Parallel()
+	if _, err := exec.LookPath("gcc"); err != nil {
+		t.Skip("gcc is not installed")
+	}
 	fname := filepath.Join(TestDir, "main.c")
 	require.NoError(t, os.WriteFile(fname,
 		[]byte(`#include <stdio.h>
@@ -401,6 +404,9 @@ func TestNoQuestionMarks(t *testing.T) {
 // "gio trash". Make an item then trash it to verify that this works.
 func TestGIOTrash(t *testing.T) {
 	t.Parallel()
+	if _, err := exec.LookPath("gio"); err != nil {
+		t.Skip("gio is not installed")
+	}
 	fname := filepath.Join(TestDir, "trash_me.txt")
 	require.NoError(t, os.WriteFile(fname, []byte("i should be trashed"), 0644))
 
@@ -446,6 +452,9 @@ func TestListChildrenPaging(t *testing.T) {
 // being uploaded (can check syscalls via "inotifywait -m -r .").
 func TestLibreOfficeSavePattern(t *testing.T) {
 	t.Parallel()
+	if _, err := exec.LookPath("libreoffice"); err != nil {
+		t.Skip("libreoffice is not installed")
+	}
 	content := []byte("This will break things.")
 	fname := filepath.Join(TestDir, "libreoffice.txt")
 	require.NoError(t, os.WriteFile(fname, content, 0644))

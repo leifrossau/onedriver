@@ -13,6 +13,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/jstaf/onedriver/fs"
 	"github.com/jstaf/onedriver/fs/graph"
+	"github.com/jstaf/onedriver/fs/graph/mockgraph"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -27,6 +28,14 @@ var auth *graph.Auth
 
 // Like the graph package, but designed for running tests offline.
 func TestMain(m *testing.M) {
+	if !mockgraph.Live() {
+		// These tests replay the cache left behind by a live run of package fs
+		// and need network access to be denied (sudo unshare -n), which the
+		// mock-based default setup cannot provide.
+		fmt.Println("SKIP: offline tests require a live OneDrive account " +
+			"(ONEDRIVER_TEST_LIVE=1), see \"Running tests\" in the README")
+		os.Exit(0)
+	}
 	if wd, _ := os.Getwd(); strings.HasSuffix(wd, "/offline") {
 		// depending on how this test gets launched, the working directory can be wrong
 		os.Chdir("../..")

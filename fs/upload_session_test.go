@@ -71,34 +71,27 @@ func TestUploadSessionSmallFS(t *testing.T) {
 	err := os.WriteFile(filepath.Join(TestDir, "uploadSessionSmallFS.txt"), data, 0644)
 	require.NoError(t, err)
 
-	time.Sleep(10 * time.Second)
-	item, err := graph.GetItemPath("/onedriver_tests/uploadSessionSmallFS.txt", auth)
-	if err != nil || item == nil {
-		t.Fatal(err)
+	// wait for the upload (it starts on the next upload manager tick, and may
+	// queue behind other uploads)
+	waitForRemoteContent := func(want []byte) {
+		t.Helper()
+		require.Eventuallyf(t, func() bool {
+			item, err := graph.GetItemPath("/onedriver_tests/uploadSessionSmallFS.txt", auth)
+			if err != nil || item == nil {
+				return false
+			}
+			content, _, err := graph.GetItemContent(item.ID, auth)
+			return err == nil && bytes.Equal(content, want)
+		}, retrySeconds, time.Second, "Remote content never matched \"%s\"", want)
 	}
-
-	content, _, err := graph.GetItemContent(item.ID, auth)
-	require.NoError(t, err)
-	if !bytes.Equal(content, data) {
-		t.Fatalf("Data mismatch. Original content: %s\nRemote content: %s\n", data, content)
-	}
+	waitForRemoteContent(data)
+	waitForRemoteID(t, "/onedriver_tests/uploadSessionSmallFS.txt")
 
 	// upload it again to ensure uploads with an existing remote id succeed
 	data = []byte("more super special data")
 	err = os.WriteFile(filepath.Join(TestDir, "uploadSessionSmallFS.txt"), data, 0644)
 	require.NoError(t, err)
-
-	time.Sleep(15 * time.Second)
-	item2, err := graph.GetItemPath("/onedriver_tests/uploadSessionSmallFS.txt", auth)
-	if err != nil || item2 == nil {
-		t.Fatal(err)
-	}
-
-	content, _, err = graph.GetItemContent(item2.ID, auth)
-	require.NoError(t, err)
-	if !bytes.Equal(content, data) {
-		t.Fatalf("Data mismatch. Original content: %s\nRemote content: %s\n", data, content)
-	}
+	waitForRemoteContent(data)
 }
 
 // copy large file inside onedrive mount, then verify that we can still

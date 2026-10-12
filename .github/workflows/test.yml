@@ -1,0 +1,46 @@
+name: Mock tests
+# Runs the fs/ test suites against the in-memory Microsoft Graph mock
+# (fs/graph/mockgraph). No OneDrive account or secrets are needed.
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    name: Run mock tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Install apt dependencies
+        run: |
+          sudo apt update
+          sudo apt install \
+            fuse3 \
+            gcc \
+            pkg-config \
+            libwebkit2gtk-4.1-dev \
+            libjson-glib-dev \
+            make
+
+      - name: Check FUSE is available
+        run: |
+          ls -l /dev/fuse
+          which fusermount3
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-go-
+
+      - name: Run tests
+        run: make test
+
+      - name: Run tests with the race detector
+        run: make test-race

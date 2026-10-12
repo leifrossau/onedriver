@@ -38,7 +38,7 @@ func TestMode(t *testing.T) {
 	require.NoError(t, os.WriteFile("mount"+fname, []byte("test"), 0644))
 
 	var err error
-	for i := 0; i < 10; i++ {
+	for i := 0; i < int(retrySeconds/time.Second); i++ {
 		item, err = graph.GetItemPath(fname, auth)
 		if err == nil && item != nil {
 			break
@@ -76,7 +76,7 @@ func TestIsDir(t *testing.T) {
 			return true
 		}
 		return false
-	}, 10*time.Second, time.Second, "Could not create item.")
+	}, retrySeconds, time.Second, "Could not create item.")
 }
 
 // A filename like .~lock.libreoffice-test.docx# will fail to upload unless the

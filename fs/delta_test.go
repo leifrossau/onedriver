@@ -30,6 +30,34 @@ func (i *Inode) setContent(f *Filesystem, newContent []byte) {
 	i.DriveItem.File.Hashes.QuickXorHash = graph.QuickXORHash(&newContent)
 }
 
+// waitForRemoteID blocks until the upload of the file at path has completed and
+// the upload manager has noticed (it only checks once per tick): the filesystem
+// has swapped the file's local ID for the server's ID and nothing is pending
+// anymore.
+//
+// Tests use this before changing a file server-side or rewriting it, because
+// the (mock) server is much faster than the real one and these races would
+// otherwise be hit constantly:
+//
+// BUG: if another device renames the file between its upload landing on the
+// server and the upload manager noticing completion, applyDelta creates a
+// second inode from the delta and the later MoveID(local -> remote) clobbers
+// it, leaving the file under its old name locally (see
+// TestDeltaRenameWhileUploadCompletes).
+//
+// BUG: rewriting a file while its previous upload session is started or
+// complete-but-unnoticed replaces the session in UploadManager.sessions without
+// decrementing UploadManager.inFlight, so the slot leaks (see
+// TestUploadManagerInFlightLeak).
+func waitForRemoteID(t *testing.T, path string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		inode, err := fs.GetPath(path, auth)
+		return err == nil && inode != nil && !isLocalID(inode.ID()) &&
+			!fs.uploads.IsUploadPending(inode.ID())
+	}, retrySeconds, 200*time.Millisecond, "upload of %s never completed", path)
+}
+
 // In this test, we create a directory through the API, and wait to see if
 // the cache picks it up post-creation.
 func TestDeltaMkdir(t *testing.T) {
@@ -69,7 +97,7 @@ func TestDeltaRmdir(t *testing.T) {
 	// wait for delta sync
 	assert.Eventually(t, func() bool {
 		_, err := os.Stat(fname)
-		return err == nil
+		return err != nil
 	}, retrySeconds, time.Second, "File deletion not picked up by client")
 }
 
@@ -83,12 +111,13 @@ func TestDeltaRename(t *testing.T) {
 		0644,
 	))
 
+	waitForRemoteID(t, "/onedriver_tests/delta/delta_rename_start")
 	var item *graph.DriveItem
 	var err error
 	require.Eventually(t, func() bool {
 		item, err = graph.GetItemPath("/onedriver_tests/delta/delta_rename_start", auth)
 		return err == nil
-	}, 10*time.Second, time.Second, "Could not prepare /onedriver_test/delta/delta_rename_start")
+	}, retrySeconds, time.Second, "Could not prepare /onedriver_test/delta/delta_rename_start")
 	inode := NewInodeDriveItem(item)
 
 	require.NoError(t, graph.Rename(inode.ID(), "delta_rename_end", inode.ParentID(), auth))
@@ -112,14 +141,14 @@ func TestDeltaMoveParent(t *testing.T) {
 		[]byte("carrotcake"),
 		0644,
 	))
-	time.Sleep(time.Second)
+	waitForRemoteID(t, "/onedriver_tests/delta/delta_move_start")
 
 	var item *graph.DriveItem
 	var err error
 	require.Eventually(t, func() bool {
 		item, err = graph.GetItemPath("/onedriver_tests/delta/delta_move_start", auth)
 		return err == nil
-	}, 10*time.Second, time.Second)
+	}, retrySeconds, time.Second)
 
 	newParent, err := graph.GetItemPath("/onedriver_tests/", auth)
 	require.NoError(t, err)
@@ -146,11 +175,12 @@ func TestDeltaContentChangeRemote(t *testing.T) {
 		0644,
 	))
 
-	// change and upload it via the API
-	time.Sleep(time.Second * 10)
+	// wait for the local write to be uploaded, then change and upload it via
+	// the API
+	waitForRemoteID(t, "/onedriver_tests/delta/remote_content")
 	item, err := graph.GetItemPath("/onedriver_tests/delta/remote_content", auth)
-	inode := NewInodeDriveItem(item)
 	require.NoError(t, err)
+	inode := NewInodeDriveItem(item)
 	newContent := []byte("because it has been changed remotely!")
 	inode.setContent(fs, newContent)
 	data := fs.content.Get(inode.ID())

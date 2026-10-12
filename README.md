@@ -192,16 +192,38 @@ fusermount3 -uz mount
 
 ### Running the tests
 
-The tests will write and delete files/folders on your onedrive account at the
-path `/onedriver_tests`. Note that the offline test suite requires `sudo` to
-remove network access to simulate being offline.
+By default the tests run against an in-memory fake of Microsoft Graph
+(`fs/graph/mockgraph`), so they need **no OneDrive account, no secrets and no
+network access** - only FUSE (`fusermount3` works fine without root):
+
+```bash
+# run the whole fs/ test suite against the mock server
+make test
+
+# the same, with the race detector
+make test-race
+
+# or directly
+go test -count=1 -timeout 300s ./fs/...
+```
+
+The suite mounts a real FUSE filesystem in a temporary directory and removes it
+afterwards. Tests that can only be meaningful against the real service (the
+offline tests, which need `sudo` to cut off network access, and anything that
+relies on Microsoft-specific behavior) are skipped with a message explaining
+why.
+
+To also test against a real account, opt in with `ONEDRIVER_TEST_LIVE=1`. The
+live tests write and delete files/folders on your onedrive account at the path
+`/onedriver_tests`. Note that the offline test suite requires `sudo` to remove
+network access to simulate being offline.
 
 ```bash
 # setup test tooling for first time run
 make test-init
 
-# actually run tests
-make test
+# run the tests against your own account (includes the offline tests)
+make test-live
 ```
 
 ### Installation from source
