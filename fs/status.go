@@ -312,7 +312,10 @@ func (f *Filesystem) lookupPath(path string) (*Inode, error) {
 	path = "/" + strings.Trim(path, "/")
 	inode, err := f.GetPath(path, f.auth)
 	if inode == nil {
-		if err != nil && graph.IsOffline(err) {
+		// GetPath reports a missing item with this message, other errors
+		// (network, server) are passed on
+		if err != nil && !strings.Contains(err.Error(), "does not exist") &&
+			!strings.Contains(err.Error(), "HTTP 404") {
 			return nil, err
 		}
 		return nil, ErrNotFound

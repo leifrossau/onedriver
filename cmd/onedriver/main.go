@@ -158,18 +158,22 @@ func main() {
 		Str("cachePath", cachePath).
 		Str("mountpoint", absMountPath).
 		Msg("Serving filesystem.")
+	var svc *onedriverdbus.Service
 	if conn, err := onedriverdbus.Connect(); err != nil {
 		log.Warn().Err(err).Msg("Session D-Bus unavailable, not exporting the status interface.")
 	} else {
 		defer conn.Close()
-		if svc, err := onedriverdbus.Start(conn, absMountPath, filesystem); err != nil {
+		if svc, err = onedriverdbus.Start(conn, absMountPath, filesystem); err != nil {
+			svc = nil
 			log.Warn().Err(err).Msg("Could not export the D-Bus status interface.")
 		} else {
-			defer svc.Close()
 			log.Info().Str("name", svc.Name()).Msg("Exported D-Bus status interface.")
 		}
 	}
 	server.Serve()
+	if svc != nil {
+		svc.Close()
+	}
 	filesystem.Stop()
 }
 
