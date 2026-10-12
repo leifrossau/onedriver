@@ -233,6 +233,8 @@ func (f *Filesystem) OpenDir(cancel <-chan struct{}, in *fuse.OpenIn, out *fuse.
 		return fuse.EREMOTEIO
 	}
 
+	f.enqueueThumbnails(children)
+
 	parent := f.GetID(dir.ParentID())
 	if parent == nil {
 		// This is the parent of the mountpoint. The FUSE kernel module discards

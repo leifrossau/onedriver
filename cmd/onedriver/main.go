@@ -134,6 +134,10 @@ func main() {
 		CacheLimit: cacheLimit,
 		EvictAfter: time.Duration(config.EvictAfterDays) * 24 * time.Hour,
 	})
+	filesystem.SetThumbnails(fs.ThumbnailOptions{
+		Enabled:    config.ServerThumbnailsEnabled(),
+		Mountpoint: absMountPath,
+	})
 	go filesystem.DeltaLoop(30 * time.Second)
 	xdgVolumeInfo(filesystem, auth)
 

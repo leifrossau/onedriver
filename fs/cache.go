@@ -56,6 +56,10 @@ type Filesystem struct {
 	// background hydration of pinned items and cache eviction, see pin.go
 	pins *pinWorker
 
+	// server-side thumbnails for file managers, see thumbnails.go
+	thumbsM sync.RWMutex
+	thumbs  *thumbnailer
+
 	// shutdown of background goroutines, see Stop
 	stopM   sync.Mutex
 	stopped bool

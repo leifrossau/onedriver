@@ -1,9 +1,13 @@
 package mockgraph
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"io"
 	"mime"
 	"net/http"
@@ -217,6 +221,9 @@ func (s *Server) graph(w http.ResponseWriter, r *http.Request, p string) {
 			return
 		}
 		serveContent(w, r, t.node)
+
+	case r.Method == http.MethodGet && strings.HasPrefix(t.suffix, "/thumbnails/"):
+		s.thumbnail(w, t)
 
 	case r.Method == http.MethodGet && t.suffix == "/delta":
 		s.delta(w, r, t)
@@ -628,4 +635,42 @@ func (s *Server) uploadChunk(w http.ResponseWriter, r *http.Request, id string) 
 		n = s.putContent(sess.parentID, sess.name, sess.data, sess.mtime)
 	}
 	writeJSON(w, status, s.json(n, false))
+}
+
+// thumbnail serves /thumbnails/0/c{w}x{h}/content: a generated JPEG fitting in
+// the requested box for the file types OneDrive can render, 404 otherwise.
+func (s *Server) thumbnail(w http.ResponseWriter, t target) {
+	if t.node == nil || t.node.dir {
+		writeServiceErr(w, errNotFound)
+		return
+	}
+	var box int
+	if _, err := fmt.Sscanf(t.suffix, "/thumbnails/0/c%dx%d/content", &box, &box); err != nil || box <= 0 {
+		writeErr(w, 404, "itemNotFound", "no such thumbnail")
+		return
+	}
+	switch strings.ToLower(path.Ext(t.node.name)) {
+	case ".jpg", ".jpeg", ".png", ".gif", ".pdf", ".docx", ".xlsx", ".pptx", ".mp4":
+	default:
+		writeErr(w, 404, "itemNotFound", "no thumbnail for this file type")
+		return
+	}
+	// 3:2 image, at most 300 pixels wide (the server may return other sizes
+	// than requested)
+	width := box
+	if width > 300 {
+		width = 300
+	}
+	img := image.NewRGBA(image.Rect(0, 0, width, width*2/3))
+	for y := 0; y < img.Bounds().Dy(); y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{uint8(x), uint8(y), 128, 255})
+		}
+	}
+	var buf bytes.Buffer
+	jpeg.Encode(&buf, img, nil)
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Content-Length", strconv.Itoa(buf.Len()))
+	w.WriteHeader(200)
+	w.Write(buf.Bytes())
 }
