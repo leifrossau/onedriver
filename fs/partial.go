@@ -27,6 +27,20 @@ import (
 // is opened for writing, partial files are downloaded in full first, so local
 // changes (and thus uploads) always start from complete content. Pinned files
 // are hydrated with full downloads as before.
+//
+// Ranges belong to one version of the file (its QuickXorHash). A delta that
+// changes a closed file deletes its cached content (and thus the ranges); for
+// an open file, the next Read notices the hash change and starts over. Open
+// does not set FOPEN_KEEP_CACHE, so the kernel drops its page cache of a file
+// on every open and never serves pages of an old version to a new open.
+//
+// While chunks of a file are fetched, GetTransfers lists it as an active
+// download with total = file size and done = bytes cached so far.
+//
+// Lock order: inode lock -> partialFile.mu; network I/O happens without
+// either. Concurrent reads of the same chunk are deduplicated through
+// partialFile.inflight. Range fetches step aside for full downloads (the
+// per-ID download lock), and verification runs under that lock.
 
 const (
 	// chunks are the unit of fetching and of deduplication
@@ -65,7 +79,7 @@ func (f *Filesystem) downloadInProgress(id string) chan struct{} {
 // openLazy is Open for reading a file that has no local changes: it uses the
 // cached content if it is complete and current, and otherwise makes the file
 // partial without downloading anything. ok=false means the caller should use
-// the full download path (a full download is running right now).
+// the full download path (the download lock stayed busy for too long).
 func (f *Filesystem) openLazy(ctx zerolog.Logger, inode *Inode, fd *os.File, remoteHash string) (fuse.Status, bool) {
 	id := inode.ID()
 	for attempt := 0; attempt < 10; attempt++ {
