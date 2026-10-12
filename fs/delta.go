@@ -166,6 +166,25 @@ func (f *Filesystem) applyDelta(delta *graph.DriveItem) error {
 	// appropriate parent
 	prevID := "" // local ID the item was tracked under before this delta, if any
 	if local == nil {
+		// Our own upload may have created this item, without the upload loop
+		// having noticed yet. Match it by ID rather than by name, the item
+		// may already have been renamed or moved on the server.
+		if localID := f.uploads.UploadedAs(id); isLocalID(localID) && localID != "" {
+			if local = f.GetID(localID); local != nil {
+				ctx.Info().
+					Str("localID", localID).
+					Msg("Item was created by our own upload, moving it to its new ID.")
+				prevID = localID
+				if err := f.MoveID(localID, id); err != nil {
+					ctx.Error().
+						Str("localID", localID).
+						Err(err).
+						Msg("Could not move item to new, nonlocal ID!")
+				}
+			}
+		}
+	}
+	if local == nil {
 		// check if we don't have it here first
 		local, _ = f.GetChild(parentID, name, nil)
 		if local != nil {

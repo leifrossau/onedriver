@@ -528,8 +528,23 @@ func (f *Filesystem) InsertPath(key string, auth *graph.Auth, inode *Inode) (uin
 }
 
 // MoveID moves an item to a new ID name. Also responsible for handling the
-// actual overwrite of the item's IDInternal field
+// actual overwrite of the item's IDInternal field. Any pending upload for the
+// item is kept and re-keyed to the new ID (never cancelled, which would
+// silently drop local changes). Must not be called with an inode lock held.
 func (f *Filesystem) MoveID(oldID string, newID string) error {
+	if f.uploads != nil && oldID != newID {
+		// re-key first: sessions created from the inode before it is moved
+		// below are then redirected to newID as well
+		f.uploads.MoveUpload(oldID, newID)
+	}
+	return f.moveID(oldID, newID)
+}
+
+// moveID is MoveID without touching the upload manager.
+func (f *Filesystem) moveID(oldID string, newID string) error {
+	if oldID == newID {
+		return nil
+	}
 	inode := f.GetID(oldID)
 	if inode == nil {
 		// It may have already been renamed. This is not an error. We assume
@@ -540,19 +555,41 @@ func (f *Filesystem) MoveID(oldID string, newID string) error {
 		}
 	}
 
-	// need to rename the child under the parent
-	parent := f.GetID(inode.ParentID())
-	parent.Lock()
-	for i, child := range parent.children {
-		if child == oldID {
-			parent.children[i] = newID
-			break
+	// remove the item from its parent under the old ID
+	f.deleteID(oldID)
+
+	// A delta may already have inserted a second inode for the new ID (for
+	// instance if the item was renamed on the server before we learned its
+	// ID, so it could not be matched by name). That inode carries the newer
+	// server-side name and parent: apply them to ours and drop the duplicate.
+	if entry, exists := f.metadata.Load(newID); exists && entry.(*Inode) != inode {
+		dup := entry.(*Inode)
+		dup.RLock()
+		name := dup.DriveItem.Name
+		parentID := ""
+		if dup.DriveItem.Parent != nil {
+			parentID = dup.DriveItem.Parent.ID
 		}
+		dup.RUnlock()
+		f.deleteID(newID)
+
+		inode.Lock()
+		if name != "" {
+			inode.DriveItem.Name = name
+		}
+		if parentID != "" && inode.DriveItem.Parent != nil {
+			inode.DriveItem.Parent.ID = parentID
+		}
+		inode.Unlock()
+		log.Info().
+			Str("oldID", oldID).
+			Str("id", newID).
+			Str("name", name).
+			Str("parentID", parentID).
+			Msg("Merged duplicate inode for new ID, keeping its server-side name and parent.")
 	}
-	parent.Unlock()
 
 	// now actually perform the metadata+content move
-	f.DeleteID(oldID)
 	f.InsertID(newID, inode)
 	if inode.IsDir() {
 		return nil
