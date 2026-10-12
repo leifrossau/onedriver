@@ -13,7 +13,8 @@ Window {
     required property var backend
 
     width: 380
-    height: 520
+    // shrink to the content, up to a maximum (the bottom edge stays anchored)
+    height: Math.min(520, Math.max(240, content.implicitHeight + 2))
     visible: false
     color: "transparent"
     title: qsTr("OneDrive activity")
@@ -35,6 +36,7 @@ Window {
         Kirigami.Theme.inherit: false
 
         ColumnLayout {
+            id: content
             anchors.fill: parent
             anchors.margins: 1
             spacing: 0
@@ -108,6 +110,7 @@ Window {
                 id: scroll
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                implicitHeight: contentHeight + topPadding + bottomPadding
                 contentWidth: availableWidth
                 clip: true
 

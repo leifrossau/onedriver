@@ -337,7 +337,16 @@ void Backend::fetchRecent(const QString &service)
     asyncCall<QDBusPendingReply<QList<RecentEntry>>>(this, mountCall(service, QStringLiteral("GetRecent"), {QVariant::fromValue(uint(30))}),
                                                      [this, service](const QDBusPendingReply<QList<RecentEntry>> &reply) {
         if (service == currentService() && !reply.isError()) {
-            m_recent.setEntries(reply.value());
+            // Hidden files (.xdg-volume-info, .Trash-1000/...) are read by the
+            // desktop itself and are noise here, unless something went wrong.
+            QList<RecentEntry> entries;
+            for (const RecentEntry &e : reply.value()) {
+                const bool hidden = e.path.startsWith(QLatin1Char('.')) || e.path.contains(QLatin1String("/."));
+                if (!hidden || e.action == QLatin1String("conflict") || e.action == QLatin1String("error")) {
+                    entries.append(e);
+                }
+            }
+            m_recent.setEntries(entries);
         }
     });
 }
