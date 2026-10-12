@@ -225,6 +225,22 @@ evictAfterDays: 30
 Only content that is not pinned, not open, and has no local changes waiting to
 be uploaded is ever evicted.
 
+## D-Bus interface
+
+Every running onedriver exports its status and some controls (pause/resume,
+sync now, recent activity, pinning, ...) on the session bus, under the name
+`io.github.onedriver.Mount.<escaped mountpoint>`. See
+[docs/dbus-interface.md](docs/dbus-interface.md) for the full interface.
+
+```bash
+busctl --user list | grep io.github.onedriver
+busctl --user introspect io.github.onedriver.Mount.home_me_OneDrive /io/github/onedriver/Mount
+busctl --user call io.github.onedriver.Mount.home_me_OneDrive /io/github/onedriver/Mount \
+    io.github.onedriver.Mount1 GetStatus
+busctl --user call io.github.onedriver.Mount.home_me_OneDrive /io/github/onedriver/Mount \
+    io.github.onedriver.Mount1 Pause
+```
+
 ## Building onedriver yourself
 
 In addition to the traditional [Go tooling](https://golang.org/dl/), you will

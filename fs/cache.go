@@ -28,6 +28,7 @@ type Filesystem struct {
 	root      string // the id of the filesystem's root item
 	deltaLink string
 	uploads   *UploadManager
+	ctl       *syncControl // pause, activity and error reporting, see status.go
 
 	sync.RWMutex
 	offline    bool
@@ -138,7 +139,9 @@ func NewFilesystem(auth *graph.Auth, cacheDir string) *Filesystem {
 		downloads:     make(map[string]chan struct{}),
 		openHandles:   make(map[uint64]int),
 		stopCh:        make(chan struct{}),
+		ctl:           newSyncControl(),
 	}
+	fs.ctl.cancelAuthHook = auth.OnRenewalFailure(fs.noteAuthFailure)
 
 	rootItem, err := graph.GetItem("root", auth)
 	root := NewInodeDriveItem(rootItem)
@@ -245,6 +248,9 @@ func (f *Filesystem) Stop() {
 	}
 	f.stopped = true
 	close(f.stopCh)
+	if f.ctl.cancelAuthHook != nil {
+		f.ctl.cancelAuthHook()
+	}
 	f.stopM.Unlock()
 
 	done := make(chan struct{})

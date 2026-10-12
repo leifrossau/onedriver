@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jstaf/onedriver/fs/graph"
+	"github.com/jstaf/onedriver/fs/status"
 	"github.com/rs/zerolog/log"
 	bolt "go.etcd.io/bbolt"
 )
@@ -163,7 +164,7 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 					// max active upload sessions are capped at this limit for faster
 					// uploads of individual files and also to prevent possible server-
 					// side throttling that can cause errors.
-					if inFlight < maxUploadsInFlight {
+					if inFlight < maxUploadsInFlight && !u.fs.Paused() {
 						inFlight++
 						// mark as started synchronously so the next tick
 						// counts it even if the goroutine has not run yet
@@ -183,6 +184,7 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 								"Local changes were NOT uploaded to OneDrive; the file is kept " +
 								"marked as modified and will be uploaded the next time it is saved.")
 						u.finishUpload(session.ID)
+						u.fs.noteUploadDropped(session.ID, u.sessionPath(session), session)
 						// Do not leave the inode looking clean: hasChanges was
 						// cleared when the upload was queued, and with the
 						// session gone IsUploadPending is false too, so delta
@@ -247,6 +249,8 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 					// the old ID is the one that was used to add it to the queue.
 					// cleanup the session.
 					u.finishUpload(session.OldID)
+					u.fs.noteUploadDone(session.ID, session.OldID)
+					u.fs.recordActivity(u.sessionPath(session), status.ActionUploaded)
 				}
 			}
 		}
@@ -532,4 +536,15 @@ func (u *UploadManager) sessionState(id string) (state int, exists bool) {
 		return uploadNotStarted, reserved
 	}
 	return session.getState(), true
+}
+
+// sessionPath returns the path of the item an upload session belongs to, or
+// just its name if the item is gone. No locks may be held by the caller.
+func (u *UploadManager) sessionPath(session *UploadSession) string {
+	for _, id := range []string{session.ID, session.OldID} {
+		if inode := u.fs.GetID(id); inode != nil {
+			return inode.Path()
+		}
+	}
+	return session.Name
 }

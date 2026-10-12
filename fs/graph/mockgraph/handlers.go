@@ -253,6 +253,7 @@ func (s *Server) json(n *node, tombstone bool) map[string]interface{} {
 		"name":                 n.name,
 		"size":                 s.size(n),
 		"eTag":                 fmt.Sprintf(`"{%s},%d"`, n.id, n.ver),
+		"webUrl":               "https://onedrive.mock.invalid/items/" + n.id,
 		"cTag":                 fmt.Sprintf(`"c:{%s},%d"`, n.id, n.cver),
 		"createdDateTime":      n.created.Format(time.RFC3339),
 		"lastModifiedDateTime": n.mtime.Format(time.RFC3339),

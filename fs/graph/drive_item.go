@@ -68,6 +68,7 @@ type DriveItem struct {
 	Deleted          *Deleted         `json:"deleted,omitempty"`
 	ConflictBehavior string           `json:"@microsoft.graph.conflictBehavior,omitempty"`
 	ETag             string           `json:"eTag,omitempty"`
+	WebURL           string           `json:"webUrl,omitempty"`
 }
 
 // IsDir returns if the DriveItem represents a directory or not
