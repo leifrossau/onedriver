@@ -1,0 +1,68 @@
+# Maintainer: Leif Rossau <leifrossau@gmail.com>
+#
+# Builds onedriver-fork from the local git checkout this PKGBUILD lives in
+# (pkg/arch/ inside the repo). To build from GitHub instead, replace the
+# source line with:
+#   source=("onedriver::git+https://github.com/leifrossau/onedriver.git#branch=fork-improvements")
+# (or drop "#branch=..." for the default branch).
+
+pkgname=onedriver-fork
+pkgver=0.15.0.4.r60.gf824013
+pkgrel=1
+pkgdesc='Native Linux filesystem for Microsoft OneDrive (fork with tray icon and activity popup)'
+arch=('x86_64')
+url='https://github.com/leifrossau/onedriver'
+license=('GPL-3.0-or-later')
+depends=('fuse3' 'webkit2gtk-4.1' 'gtk3' 'gst-plugins-good'
+         'qt6-base' 'qt6-declarative' 'kirigami' 'layer-shell-qt' 'qqc2-desktop-style')
+makedepends=('go' 'gcc' 'pkg-config' 'cmake' 'extra-cmake-modules' 'git')
+optdepends=('qt6-wayland: run the activity popup natively on Wayland')
+provides=('onedriver')
+conflicts=('onedriver')
+# $startdir is the directory holding this PKGBUILD; the repo root is two levels up.
+source=("onedriver::git+file://${startdir}/../..")
+sha256sums=('SKIP')
+options=('!lto')
+
+pkgver() {
+  cd onedriver
+  # "v0.15.0-4-58-g48e546f" -> "0.15.0.4.r58.g48e546f"
+  git describe --long --tags --match 'v*' 2>/dev/null \
+    | sed 's/^v//; s/-\([0-9]*\)-g/.r\1.g/; s/-/./g' \
+    || printf '0.15.0.r%s.g%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd onedriver
+  export GOFLAGS="-mod=readonly"
+  go mod download -x
+}
+
+build() {
+  cd onedriver
+  export CGO_CPPFLAGS="${CPPFLAGS}"
+  export CGO_CFLAGS="${CFLAGS} -Wno-deprecated-declarations"
+  export CGO_CXXFLAGS="${CXXFLAGS}"
+  export CGO_LDFLAGS="${LDFLAGS}"
+  export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw"
+
+  # the Makefile injects the git commit into the version string via -ldflags
+  make onedriver onedriver-launcher onedriver-tray
+  make activity CMAKE_FLAGS="-DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr"
+}
+
+check() {
+  cd onedriver
+  export CGO_CFLAGS="${CFLAGS} -Wno-deprecated-declarations"
+  export GOFLAGS="-buildmode=pie -trimpath -mod=readonly -modcacherw"
+  # offline tests only; the FUSE e2e tests are not run here
+  go test -count=1 ./fs/graph/... ./fs/conflict/ ./cmd/onedriver-tray/...
+  QT_QPA_PLATFORM=offscreen ctest --test-dir build/activity --output-on-failure
+}
+
+package() {
+  cd onedriver
+  make install install-activity \
+    DESTDIR="${pkgdir}" PREFIX=/usr SYSCONFDIR=/etc SYSTEMDUSERDIR=/usr/lib/systemd/user
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

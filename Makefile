@@ -1,4 +1,4 @@
-.PHONY: all, activity, test-activity, install-activity, test, test-race, test-live, test-init, srpm, rpm, dsc, changes, deb, clean, install, uninstall
+.PHONY: all activity test-activity install-activity test test-race test-live test-init srpm rpm dsc changes deb clean install uninstall
 
 # autocalculate software/package versions
 VERSION := $(shell grep Version onedriver.spec | sed 's/Version: *//g')
@@ -9,6 +9,16 @@ RPM_FULL_VERSION = $(VERSION)-$(RELEASE)$(DIST)
 # -Wno-deprecated-declarations is for gotk3, which uses deprecated methods for older
 # glib compatibility: https://github.com/gotk3/gotk3/issues/762#issuecomment-919035313
 CGO_CFLAGS := CGO_CFLAGS=-Wno-deprecated-declarations
+
+# install locations, DESTDIR is for package builds
+PREFIX ?= /usr
+SYSCONFDIR ?= /etc
+SYSTEMDUSERDIR ?= /etc/systemd/user
+
+# install locations, DESTDIR is for package builds
+PREFIX ?= /usr
+SYSCONFDIR ?= /etc
+SYSTEMDUSERDIR ?= /etc/systemd/user
 
 # test-specific variables
 TEST_UID := $(shell whoami)
@@ -44,7 +54,7 @@ onedriver-tray: $(shell find cmd/onedriver-tray/ -type f)
 # The activity popup (Qt6/QML/Kirigami) needs cmake and Qt, so it is not part of
 # "all". Build it with "make activity", see "Activity window" in the README.
 activity:
-	cmake -S activity -B build/activity -DBUILD_TESTING=ON
+	cmake -S activity -B build/activity -DBUILD_TESTING=ON $(CMAKE_FLAGS)
 	cmake --build build/activity
 
 
@@ -53,40 +63,39 @@ test-activity: activity
 
 
 install-activity: activity
-	cmake --install build/activity --prefix /usr
+	DESTDIR=$(DESTDIR) cmake --install build/activity --prefix $(PREFIX)
 
 
 install: onedriver onedriver-launcher onedriver-tray
-	cp onedriver /usr/bin/
-	cp onedriver-launcher /usr/bin/
-	cp onedriver-tray /usr/bin/
-	mkdir -p /usr/share/icons/onedriver/
-	cp pkg/resources/onedriver.svg /usr/share/icons/onedriver/
-	cp pkg/resources/onedriver.png /usr/share/icons/onedriver/
-	cp pkg/resources/onedriver-128.png /usr/share/icons/onedriver/
-	cp pkg/resources/onedriver-launcher.desktop /usr/share/applications/
-	cp pkg/resources/onedriver-tray.desktop /usr/share/applications/
-	mkdir -p /etc/xdg/autostart/
-	cp pkg/resources/onedriver-tray.desktop /etc/xdg/autostart/
-	cp pkg/resources/onedriver@.service /etc/systemd/user/
-	gzip -c pkg/resources/onedriver.1 > /usr/share/man/man1/onedriver.1.gz
-	mandb
+	install -Dm755 onedriver $(DESTDIR)$(PREFIX)/bin/onedriver
+	install -Dm755 onedriver-launcher $(DESTDIR)$(PREFIX)/bin/onedriver-launcher
+	install -Dm755 onedriver-tray $(DESTDIR)$(PREFIX)/bin/onedriver-tray
+	install -Dm644 pkg/resources/onedriver.svg $(DESTDIR)$(PREFIX)/share/icons/onedriver/onedriver.svg
+	install -Dm644 pkg/resources/onedriver.png $(DESTDIR)$(PREFIX)/share/icons/onedriver/onedriver.png
+	install -Dm644 pkg/resources/onedriver-128.png $(DESTDIR)$(PREFIX)/share/icons/onedriver/onedriver-128.png
+	install -Dm644 pkg/resources/onedriver-launcher.desktop $(DESTDIR)$(PREFIX)/share/applications/onedriver-launcher.desktop
+	install -Dm644 pkg/resources/onedriver-tray.desktop $(DESTDIR)$(PREFIX)/share/applications/onedriver-tray.desktop
+	install -Dm644 pkg/resources/onedriver-tray.desktop $(DESTDIR)$(SYSCONFDIR)/xdg/autostart/onedriver-tray.desktop
+	install -Dm644 pkg/resources/onedriver@.service $(DESTDIR)$(SYSTEMDUSERDIR)/onedriver@.service
+	mkdir -p $(DESTDIR)$(PREFIX)/share/man/man1
+	gzip -9nc pkg/resources/onedriver.1 > $(DESTDIR)$(PREFIX)/share/man/man1/onedriver.1.gz
+	$(if $(DESTDIR),,mandb)
 
 
 uninstall:
 	rm -f \
-		/usr/bin/onedriver \
-		/usr/bin/onedriver-launcher \
-		/usr/bin/onedriver-tray \
-		/usr/bin/onedriver-activity \
-		/usr/share/applications/onedriver-activity.desktop \
-		/etc/xdg/autostart/onedriver-tray.desktop \
-		/usr/share/applications/onedriver-tray.desktop \
-		/etc/systemd/user/onedriver@.service \
-		/usr/share/applications/onedriver-launcher.desktop \
-		/usr/share/man/man1/onedriver.1.gz
-	rm -rf /usr/share/icons/onedriver
-	mandb
+		$(PREFIX)/bin/onedriver \
+		$(PREFIX)/bin/onedriver-launcher \
+		$(PREFIX)/bin/onedriver-tray \
+		$(PREFIX)/bin/onedriver-activity \
+		$(PREFIX)/share/applications/onedriver-activity.desktop \
+		$(SYSCONFDIR)/xdg/autostart/onedriver-tray.desktop \
+		$(PREFIX)/share/applications/onedriver-tray.desktop \
+		$(SYSTEMDUSERDIR)/onedriver@.service \
+		$(PREFIX)/share/applications/onedriver-launcher.desktop \
+		$(PREFIX)/share/man/man1/onedriver.1.gz
+	rm -rf $(PREFIX)/share/icons/onedriver
+	$(if $(DESTDIR),,mandb)
 
 
 # used to create release tarball for rpmbuild
