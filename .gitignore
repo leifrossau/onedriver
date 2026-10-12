@@ -61,3 +61,5 @@ pkg/arch/pkg/
 pkg/arch/src/
 pkg/arch/*.pkg.tar.*
 pkg/arch/onedriver/
+!dolphin/src/*.json
+!dolphin/CMakeLists.txt

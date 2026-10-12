@@ -228,6 +228,44 @@ At runtime it needs `qt6-declarative`, `kirigami` and (recommended)
 placed bottom-right with plain Qt, which only works on X11. The tray starts
 it and toggles it through `io.github.onedriver.Activity1.Toggle`.
 
+## Dolphin integration
+
+Like the OneDrive integration in Windows Explorer, Dolphin (and other KDE file
+managers) can show the sync state of each file and offer OneDrive actions. It
+is a KF6 plugin pair in `dolphin/`, built separately (not part of `make all`):
+
+```bash
+# Arch: sudo pacman -S cmake extra-cmake-modules qt6-base kio ki18n
+make dolphin          # cmake -S dolphin -B build/dolphin && cmake --build build/dolphin
+make test-dolphin
+sudo make install-dolphin PREFIX=/usr
+```
+
+Restart Dolphin afterwards (`killall dolphin`); plugins are loaded at startup.
+No setting needs to be enabled: overlay icon plugins (`kf6/overlayicon`) are
+always loaded by KIO, and the context menu entry is a file item action plugin
+(`kf6/kfileitemaction`) that can be switched off in Dolphin under
+Configure > Context Menu > Services if you do not want it.
+
+Emblems (read from the `user.onedriver.state` / `user.onedriver.pinned`
+extended attributes, so there is no D-Bus call per file):
+
+| State | Emblem |
+|---|---|
+| online only (`cloud`) | blue cloud (`onedriver-emblem-cloud`, shipped by the plugin) |
+| `local` and pinned | green check (`emblem-success`) |
+| `modified` / `uploading` | `emblem-synchronizing-symbolic` |
+| `error` | `emblem-error` |
+| `local`, not pinned | none |
+
+Folders only show the pinned, syncing and error emblems. The plugin follows
+the `FileStatesChanged` D-Bus signal (daemon interface v1.3) so emblems update
+live; with an older daemon they update when the folder is reloaded.
+
+The context menu gets a "OneDrive" submenu for any selection inside an
+onedriver mount: "Always keep on this device" (checkable), "Free up space" and,
+for a single item, "View online".
+
 ## Pinning / free up space
 
 Files are normally only downloaded when you open them. Like "Always keep on

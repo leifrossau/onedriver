@@ -1,0 +1,13 @@
+{
+    "KPlugin": {
+        "Id": "onedriveraction",
+        "Name": "OneDrive",
+        "Description": "OneDrive actions (keep on device, free up space, view online) for files in onedriver mounts",
+        "Icon": "folder-cloud",
+        "License": "GPL-3.0-or-later",
+        "MimeTypes": [
+            "application/octet-stream",
+            "inode/directory"
+        ]
+    }
+}
