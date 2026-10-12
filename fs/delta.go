@@ -31,12 +31,25 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 			continue
 		}
 
+		// no requests without a login, Login and SyncNow wake us up
+		if f.AuthExpired() {
+			if !f.sleepOrWake(10 * time.Second) {
+				return
+			}
+			continue
+		}
+
 		// get deltas
 		log.Trace().Msg("Fetching deltas from server.")
 		pollSuccess := false
 		deltas := make(map[string]*graph.DriveItem)
 		for {
 			incoming, cont, err := f.pollDeltas(f.auth)
+			if errors.Is(err, graph.ErrAuthExpired) {
+				// not the network's fault, the next round waits for the login
+				log.Debug().Msg("Delta fetch stopped, login expired.")
+				break
+			}
 			if err != nil {
 				// the only thing that should be able to bring the FS out
 				// of a read-only state is a successful delta call

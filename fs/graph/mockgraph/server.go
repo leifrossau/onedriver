@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path"
 	"sort"
 	"strings"
@@ -72,8 +73,37 @@ type Server struct {
 	failing map[string]int  // path prefixes whose uploads are rejected, by status
 	failDL  map[string]int  // path prefixes whose downloads are rejected, by status
 
-	reqMu    sync.Mutex
-	requests []string
+	reqMu      sync.Mutex
+	requests   []string
+	tokenMode  TokenMode
+	tokenForms []url.Values
+}
+
+// TokenMode selects how the token endpoint answers refresh_token grants.
+type TokenMode int
+
+const (
+	// TokenOK issues tokens (the default).
+	TokenOK TokenMode = iota
+	// TokenInvalidGrant rejects the refresh token with 400 invalid_grant.
+	TokenInvalidGrant
+	// TokenUnavailable answers 503, like a server having a bad day.
+	TokenUnavailable
+)
+
+// SetTokenMode changes how refresh_token grants are answered. Exchanging an
+// authorization code (login) always works.
+func (s *Server) SetTokenMode(m TokenMode) {
+	s.reqMu.Lock()
+	s.tokenMode = m
+	s.reqMu.Unlock()
+}
+
+// TokenForms returns the (decoded) form bodies of all token requests so far.
+func (s *Server) TokenForms() []url.Values {
+	s.reqMu.Lock()
+	defer s.reqMu.Unlock()
+	return append([]url.Values(nil), s.tokenForms...)
 }
 
 // New starts a mock server containing an empty drive (with a "Documents"

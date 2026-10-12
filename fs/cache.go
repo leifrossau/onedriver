@@ -145,6 +145,10 @@ func NewFilesystem(auth *graph.Auth, cacheDir string) *Filesystem {
 	}
 	content.onRemove = fs.verifiedForget
 	fs.ctl.cancelAuthHook = auth.OnRenewalFailure(fs.noteAuthFailure)
+	if auth.Expired() {
+		// started without a login (see graph.Authenticate)
+		fs.noteAuthFailure(graph.AuthExpiredMessage)
+	}
 
 	rootItem, err := graph.GetItem("root", auth)
 	root := NewInodeDriveItem(rootItem)

@@ -43,6 +43,8 @@ type Status struct {
 	QuotaTotal       uint64
 	LastSync         int64 // unix time, 0 = never
 	LastError        string
+	// AuthExpired is true while there is no valid login, only Login fixes it
+	AuthExpired bool
 	// HasError is true while an upload was dropped or authentication failed
 	HasError bool
 }

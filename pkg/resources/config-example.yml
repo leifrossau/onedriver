@@ -6,7 +6,7 @@
 # - error - Things that onedriver doesn't like, but can continue running
 #          (can possibly result in file corruption or inability to do something).
 # - fatal - Only log errors that kill the program (this log level is not recommended).
-log: debug
+log: info
 
 # cacheDir specifies which directory onedriver should store its data in.
 # This directory can get pretty large. "~" is a placeholder for your home directory.
