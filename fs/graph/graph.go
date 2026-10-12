@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"time"
 
@@ -17,8 +18,15 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// GraphURL is the API endpoint of Microsoft Graph
-const GraphURL = "https://graph.microsoft.com/v1.0"
+// GraphURL is the API endpoint of Microsoft Graph. Tests may override this
+// variable to point at an httptest server for testing purposes.
+var GraphURL = "https://graph.microsoft.com/v1.0"
+
+func init() {
+	if url := os.Getenv("ONEDRIVER_GRAPH_URL"); url != "" {
+		GraphURL = url
+	}
+}
 
 // graphError is an internal struct used when decoding Graph's error messages
 type graphError struct {
