@@ -3,6 +3,9 @@ Section: utils
 Priority: optional
 Maintainer: Jeff Stafford <jeff.stafford@protonmail.com>
 Build-Depends: golang (>= 1.15), gcc, pkg-config, libwebkit2gtk-4.1-dev, git, debhelper
+# The optional onedriver-activity popup (activity/) additionally needs: cmake,
+# extra-cmake-modules, qt6-base-dev, qt6-declarative-dev, libkirigami-dev (KF6)
+# and liblayershellqtinterface-dev. It is not built by the debian packaging yet.
 Standards-Version: 4.4.1
 Homepage: https://github.com/jstaf/onedriver
 #Vcs-Browser: https://github.com/jstaf/onedriver

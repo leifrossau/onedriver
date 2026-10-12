@@ -20,6 +20,18 @@ BuildRequires: webkit2gtk3-devel
 %else
 BuildRequires: webkit2gtk4.1-devel
 %endif
+# the optional activity popup (rpmbuild --with activity)
+%bcond_with activity
+%if %{with activity}
+BuildRequires: cmake
+BuildRequires: extra-cmake-modules
+BuildRequires: qt6-qtbase-devel
+BuildRequires: qt6-qtdeclarative-devel
+BuildRequires: kf6-kirigami-devel
+BuildRequires: layer-shell-qt-devel
+Requires: kf6-kirigami
+Requires: qt6-qtdeclarative
+%endif
 Requires: fuse3
 Requires: gstreamer1-plugins-good
 
@@ -46,6 +58,10 @@ CGO_ENABLED=0 go build -v -mod=vendor \
   -ldflags="-X github.com/jstaf/onedriver/cmd/common.commit=$(cat .commit)" \
   ./cmd/onedriver-tray
 gzip pkg/resources/onedriver.1
+%if %{with activity}
+cmake -S activity -B build/activity -DCMAKE_BUILD_TYPE=Release
+cmake --build build/activity
+%endif
 
 %install
 rm -rf $RPM_BUILD_ROOT
@@ -66,6 +82,9 @@ cp pkg/resources/%{name}-tray.desktop %{buildroot}/usr/share/applications
 cp pkg/resources/%{name}-tray.desktop %{buildroot}/etc/xdg/autostart
 cp pkg/resources/%{name}@.service %{buildroot}/usr/lib/systemd/user
 cp pkg/resources/%{name}.1.gz %{buildroot}/usr/share/man/man1
+%if %{with activity}
+DESTDIR=%{buildroot} cmake --install build/activity --prefix /usr
+%endif
 
 # fix for el8 build in mock
 %define _empty_manifest_terminate_build 0
@@ -74,6 +93,10 @@ cp pkg/resources/%{name}.1.gz %{buildroot}/usr/share/man/man1
 %attr(755, root, root) %{_bindir}/%{name}
 %attr(755, root, root) %{_bindir}/%{name}-launcher
 %attr(755, root, root) %{_bindir}/%{name}-tray
+%if %{with activity}
+%attr(755, root, root) %{_bindir}/%{name}-activity
+%attr(644, root, root) /usr/share/applications/%{name}-activity.desktop
+%endif
 %dir /usr/share/icons/%{name}
 %attr(644, root, root) /usr/share/icons/%{name}/%{name}.png
 %attr(644, root, root) /usr/share/icons/%{name}/%{name}-128.png

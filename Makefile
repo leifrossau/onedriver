@@ -1,4 +1,4 @@
-.PHONY: all, test, test-race, test-live, test-init, srpm, rpm, dsc, changes, deb, clean, install, uninstall
+.PHONY: all, activity, test-activity, install-activity, test, test-race, test-live, test-init, srpm, rpm, dsc, changes, deb, clean, install, uninstall
 
 # autocalculate software/package versions
 VERSION := $(shell grep Version onedriver.spec | sed 's/Version: *//g')
@@ -41,6 +41,21 @@ onedriver-tray: $(shell find cmd/onedriver-tray/ -type f)
 	CGO_ENABLED=0 go build -v ./cmd/onedriver-tray
 
 
+# The activity popup (Qt6/QML/Kirigami) needs cmake and Qt, so it is not part of
+# "all". Build it with "make activity", see "Activity window" in the README.
+activity:
+	cmake -S activity -B build/activity -DBUILD_TESTING=ON
+	cmake --build build/activity
+
+
+test-activity: activity
+	ctest --test-dir build/activity --output-on-failure
+
+
+install-activity: activity
+	cmake --install build/activity --prefix /usr
+
+
 install: onedriver onedriver-launcher onedriver-tray
 	cp onedriver /usr/bin/
 	cp onedriver-launcher /usr/bin/
@@ -63,6 +78,8 @@ uninstall:
 		/usr/bin/onedriver \
 		/usr/bin/onedriver-launcher \
 		/usr/bin/onedriver-tray \
+		/usr/bin/onedriver-activity \
+		/usr/share/applications/onedriver-activity.desktop \
 		/etc/xdg/autostart/onedriver-tray.desktop \
 		/usr/share/applications/onedriver-tray.desktop \
 		/etc/systemd/user/onedriver@.service \

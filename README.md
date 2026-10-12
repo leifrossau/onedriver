@@ -180,6 +180,31 @@ notifications. It talks to onedriver over D-Bus (see
 running; it starts automatically on login after installing the package. To run
 it by hand: `onedriver-tray`.
 
+## Activity window
+
+`onedriver-activity` is the popup that opens when you click the tray icon,
+similar to the OneDrive flyout on Windows: it shows the overall state and
+storage use, the files being uploaded or downloaded right now with progress,
+and the recently synced files (click to open, right click for "Open folder" /
+"View online"). Footer buttons open the folder, pause/resume, sync now, and
+start the settings. It reads everything from the D-Bus interface above and
+only does work while it is visible. It is a Qt6/QML program (Kirigami, and
+LayerShellQt to anchor it above the panel on Wayland) and is built separately
+from the Go programs:
+
+```bash
+# Arch: sudo pacman -S cmake extra-cmake-modules qt6-base qt6-declarative kirigami layer-shell-qt
+make activity            # cmake -S activity -B build/activity && cmake --build build/activity
+make test-activity       # unit tests for the models and helpers
+sudo make install-activity
+onedriver-activity --show   # starts it and shows the window; a second call toggles it
+```
+
+At runtime it needs `qt6-declarative`, `kirigami` and (recommended)
+`qqc2-desktop-style`. Without `layer-shell-qt` at build time the window is
+placed bottom-right with plain Qt, which only works on X11. The tray starts
+it and toggles it through `io.github.onedriver.Activity1.Toggle`.
+
 ## Pinning / free up space
 
 Files are normally only downloaded when you open them. Like "Always keep on
