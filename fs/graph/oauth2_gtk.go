@@ -11,6 +11,8 @@ package graph
 import "C"
 
 import (
+	"fmt"
+	"os"
 	"unsafe"
 
 	"github.com/rs/zerolog/log"
@@ -28,8 +30,13 @@ func getAuthCode(a AuthConfig, accountName string) string {
 	C.free(unsafe.Pointer(cResponse))
 
 	code, err := parseAuthCode(response)
-	if err != nil {
+	if err != nil || code == "" {
 		//TODO create a popup with the auth failure message here instead of a log message
+		fmt.Fprint(os.Stderr, "\nLogin did not complete (the window was closed, or the "+
+			"login page did not work correctly, e.g. the Authenticator number was not "+
+			"shown).\nTry again with:  onedriver -n\n"+
+			"which lets you log in using your normal web browser. To debug the "+
+			"embedded login window, run with ONEDRIVER_DEBUG_AUTH=1.\n")
 		log.Fatal().Msg("No validation code returned, or code was invalid. " +
 			"Please restart the application and try again.")
 	}
