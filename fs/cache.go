@@ -44,6 +44,19 @@ type Filesystem struct {
 
 	// remembers which cached content files were hash-verified (id -> verifiedContent)
 	verified sync.Map
+
+	// open kernel file handles per node ID (Open/Create until Release)
+	openHandlesM sync.Mutex
+	openHandles  map[uint64]int
+
+	// background hydration of pinned items and cache eviction, see pin.go
+	pins *pinWorker
+
+	// shutdown of background goroutines, see Stop
+	stopM   sync.Mutex
+	stopped bool
+	stopCh  chan struct{}
+	loops   sync.WaitGroup
 }
 
 // verifiedContent records the state of a cache file when its hash was last
@@ -123,6 +136,8 @@ func NewFilesystem(auth *graph.Auth, cacheDir string) *Filesystem {
 		auth:          auth,
 		opendirs:      make(map[uint64][]*Inode),
 		downloads:     make(map[string]chan struct{}),
+		openHandles:   make(map[uint64]int),
+		stopCh:        make(chan struct{}),
 	}
 
 	rootItem, err := graph.GetItem("root", auth)
@@ -156,11 +171,17 @@ func NewFilesystem(auth *graph.Auth, cacheDir string) *Filesystem {
 			log.Fatal().Err(err).Msg("Could not fetch root item of filesystem!")
 		}
 	}
+	// the root item is always fetched fresh from the server, keep its pin
+	// state from the previous session
+	if stored := fs.storedPins([]string{"root"}); stored["root"] != pinInherit {
+		root.pin = stored["root"]
+	}
 	// root inode is inode 1
 	fs.root = root.ID()
 	fs.InsertID(fs.root, root)
 
 	fs.uploads = NewUploadManager(2*time.Second, db, fs, auth)
+	fs.pins = newPinWorker(fs)
 
 	if !fs.IsOffline() {
 		// .Trash-UID is used by "gio trash" for user trash, create it if it
@@ -182,8 +203,64 @@ func NewFilesystem(auth *graph.Auth, cacheDir string) *Filesystem {
 		fs.deltaLink = "/me/drive/root/delta?token=latest"
 	}
 
-	// deltaloop is started manually
+	// the hydration worker for pinned items runs from the start (it is idle
+	// until something is pinned), the deltaloop is started manually
+	fs.pins.start()
 	return fs
+}
+
+// startLoop registers a long-running background goroutine with Stop. Returns
+// false if the filesystem was already stopped.
+func (f *Filesystem) startLoop() bool {
+	f.stopM.Lock()
+	defer f.stopM.Unlock()
+	if f.stopped {
+		return false
+	}
+	f.loops.Add(1)
+	return true
+}
+
+// sleep waits for d, returns false if the filesystem was stopped meanwhile.
+func (f *Filesystem) sleep(d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-f.stopCh:
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// Stop shuts down the background goroutines (delta loop, upload loop,
+// hydration worker), writes the metadata to disk and closes the database.
+// Call it after the filesystem was unmounted. The Filesystem must not be used
+// afterwards. Safe to call more than once.
+func (f *Filesystem) Stop() {
+	f.stopM.Lock()
+	if f.stopped {
+		f.stopM.Unlock()
+		return
+	}
+	f.stopped = true
+	close(f.stopCh)
+	f.stopM.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		f.loops.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		log.Warn().Msg("Background tasks did not stop in time, closing database anyway.")
+	}
+	if !f.IsOffline() {
+		f.SerializeAll()
+	}
+	f.db.Close()
 }
 
 // IsOffline returns whether or not the cache thinks its offline.
@@ -422,11 +499,20 @@ func (f *Filesystem) GetChildrenID(id string, auth *graph.Auth) (map[string]*Ino
 		return nil, err
 	}
 
+	// Items fetched from the server replace any inode we had for them, keep
+	// their explicit pin state (possibly from a previous session).
+	ids := make([]string, 0, len(fetched))
+	for _, item := range fetched {
+		ids = append(ids, item.ID)
+	}
+	pins := f.storedPins(ids)
+
 	inode.Lock()
 	inode.children = make([]string, 0)
 	for _, item := range fetched {
 		// we will always have an id after fetching from the server
 		child := NewInodeDriveItem(item)
+		child.pin = pins[item.ID]
 		f.InsertNodeID(child)
 		f.metadata.Store(child.DriveItem.ID, child)
 

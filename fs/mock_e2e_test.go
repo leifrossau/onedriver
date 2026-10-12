@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -36,9 +37,20 @@ func mountMockFS(t *testing.T, remoteDir string) (string, *Filesystem) {
 	}
 	mock.Mkdir(remoteDir)
 
+	cacheDir := filepath.Join(testDBLoc, "e2e_"+strings.ReplaceAll(t.Name(), "/", "_"))
+	mnt, cache, unmount := mountMockAt(t, cacheDir)
+	t.Cleanup(unmount)
+	return filepath.Join(mnt, remoteDir), cache
+}
+
+// mountMockAt mounts a filesystem using the given cache directory (which may
+// hold the database of an earlier mount) and returns the mountpoint, the
+// Filesystem and a function that unmounts and stops it (safe to call twice).
+func mountMockAt(t *testing.T, cacheDir string) (string, *Filesystem, func()) {
+	t.Helper()
 	mnt, err := os.MkdirTemp("", "onedriver-e2e-mount-")
 	require.NoError(t, err)
-	cache := NewFilesystem(auth, filepath.Join(testDBLoc, "e2e_"+strings.ReplaceAll(t.Name(), "/", "_")))
+	cache := NewFilesystem(auth, cacheDir)
 	server, err := fuse.NewServer(cache, mnt, &fuse.MountOptions{
 		Name:          "onedriver",
 		FsName:        "onedriver",
@@ -47,15 +59,24 @@ func mountMockFS(t *testing.T, remoteDir string) (string, *Filesystem) {
 	require.NoError(t, err)
 	go server.Serve()
 	require.NoError(t, server.WaitMount())
+	// Resolve the initial "token=latest" delta link before returning, so that
+	// every server-side change a test makes after mounting is seen by the
+	// delta loop (otherwise a change made before the loop's first poll would
+	// be skipped).
+	_, _, err = cache.pollDeltas(auth)
+	require.NoError(t, err)
 	go cache.DeltaLoop(500 * time.Millisecond)
 
-	t.Cleanup(func() {
-		if server.Unmount() != nil {
-			exec.Command("fusermount3", "-zu", mnt).Run()
-		}
-		os.Remove(mnt)
-	})
-	return filepath.Join(mnt, remoteDir), cache
+	var once sync.Once
+	return mnt, cache, func() {
+		once.Do(func() {
+			if server.Unmount() != nil {
+				exec.Command("fusermount3", "-zu", mnt).Run()
+			}
+			cache.Stop()
+			os.Remove(mnt)
+		})
+	}
 }
 
 func getState(t *testing.T, fname string) string {
