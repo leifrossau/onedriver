@@ -79,3 +79,10 @@ func TestLoadConfigEviction(t *testing.T) {
 	assert.Equal(t, "10G", conf.CacheLimit)
 	assert.Equal(t, 30, conf.EvictAfterDays)
 }
+
+func TestServerThumbnailsDefault(t *testing.T) {
+	t.Parallel()
+	assert.True(t, (&Config{}).ServerThumbnailsEnabled())
+	off := false
+	assert.False(t, (&Config{ServerThumbnails: &off}).ServerThumbnailsEnabled())
+}

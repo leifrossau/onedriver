@@ -250,6 +250,26 @@ evictAfterDays: 30
 Only content that is not pinned, not open, and has no local changes waiting to
 be uploaded is ever evicted.
 
+## Thumbnails in file managers
+
+File managers like Dolphin or Nautilus create previews by opening each image or
+document, which would download every file in a folder. To avoid that, when a
+folder is listed onedriver fetches OneDrive's own thumbnails (images, videos,
+PDFs and Office documents) for files that are not stored locally and writes them
+to the shared thumbnail cache (`$XDG_CACHE_HOME/thumbnails/{normal,large,x-large}`,
+see the [freedesktop thumbnail specification](https://specifications.freedesktop.org/thumbnail-spec/latest/)),
+so the file manager finds a valid thumbnail and never opens the file. At most
+two thumbnails are fetched at a time, at most 120 per minute, and not while
+syncing is paused or the mount is offline. Turn it off in the config file:
+
+```yaml
+serverThumbnails: false
+```
+
+Note: also exclude the mountpoint from KDE's Baloo file indexer, which would
+otherwise read (download) every file: `balooctl6 config add excludeFolders ~/OneDrive`
+(or System Settings > Search > File Search).
+
 ## D-Bus interface
 
 Every running onedriver exports its status and some controls (pause/resume,

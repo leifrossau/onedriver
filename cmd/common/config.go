@@ -24,7 +24,12 @@ type Config struct {
 	CacheLimit string `yaml:"cacheLimit,omitempty"`
 	// EvictAfterDays evicts the cached content of files that are not pinned
 	// and were not opened for this many days. 0 disables it (the default).
-	EvictAfterDays   int `yaml:"evictAfterDays,omitempty"`
+	EvictAfterDays int `yaml:"evictAfterDays,omitempty"`
+	// ServerThumbnails fills the freedesktop thumbnail cache with OneDrive's
+	// own thumbnails for files that are not stored locally, so file managers
+	// do not download every image and document to show a preview. Enabled by
+	// default; use "serverThumbnails: false" to turn it off.
+	ServerThumbnails *bool `yaml:"serverThumbnails,omitempty"`
 	graph.AuthConfig `yaml:"auth"`
 }
 
@@ -117,4 +122,9 @@ func (c Config) WriteConfig(path string) error {
 		log.Error().Err(err).Msg("Could not write config to disk.")
 	}
 	return err
+}
+
+// ServerThumbnailsEnabled returns the serverThumbnails setting (default true).
+func (c *Config) ServerThumbnailsEnabled() bool {
+	return c.ServerThumbnails == nil || *c.ServerThumbnails
 }
