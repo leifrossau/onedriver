@@ -172,11 +172,15 @@ func (u *UploadManager) uploadLoop(duration time.Duration) {
 						// mark as started synchronously so the next tick
 						// counts it even if the goroutine has not run yet
 						session.setState(uploadStarted, nil)
-						session.progress = func(done uint64) {
-							session.Lock()
-							id := session.ID
-							session.Unlock()
-							u.tr().setDone(id, status.DirUpload, done)
+						// Only assign once: a previous attempt's goroutine may
+						// still be running and reading the callback.
+						if session.progress == nil {
+							session.progress = func(done uint64) {
+								session.Lock()
+								id := session.ID
+								session.Unlock()
+								u.tr().setDone(id, status.DirUpload, done)
+							}
 						}
 						u.tr().setState(session.ID, status.DirUpload, status.TransferActive)
 						go session.Upload(u.auth)
