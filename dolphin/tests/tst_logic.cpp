@@ -22,9 +22,9 @@ private Q_SLOTS:
         QTest::newRow("cloud file") << "cloud" << false << false << QStringList{"onedriver-emblem-cloud"};
         QTest::newRow("cloud dir") << "cloud" << false << true << QStringList{};
         QTest::newRow("pinned cloud file (downloading)") << "cloud" << true << false << QStringList{"onedriver-emblem-cloud"};
-        QTest::newRow("local") << "local" << false << false << QStringList{};
-        QTest::newRow("local pinned") << "local" << true << false << QStringList{"emblem-success"};
-        QTest::newRow("pinned dir") << "local" << true << true << QStringList{"emblem-success"};
+        QTest::newRow("local") << "local" << false << false << QStringList{"onedriver-emblem-local"};
+        QTest::newRow("local pinned") << "local" << true << false << QStringList{"onedriver-emblem-pinned"};
+        QTest::newRow("pinned dir") << "local" << true << true << QStringList{"onedriver-emblem-pinned"};
         QTest::newRow("modified") << "modified" << false << false << QStringList{"emblem-synchronizing-symbolic"};
         QTest::newRow("uploading pinned") << "uploading" << true << false << QStringList{"emblem-synchronizing-symbolic"};
         QTest::newRow("error") << "error" << true << false << QStringList{"emblem-error"};

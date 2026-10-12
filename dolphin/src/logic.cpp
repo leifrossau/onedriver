@@ -20,6 +20,9 @@ QStringList overlaysFor(const FileState &st, bool isDir)
         return {QString::fromLatin1(kEmblemCloud)};
     if (st.pinned && (st.state == QLatin1String("local") || isDir))
         return {QString::fromLatin1(kEmblemPinned)};
+    // like Windows: files that are on this device get an outline check mark
+    if (st.state == QLatin1String("local") && !isDir)
+        return {QString::fromLatin1(kEmblemLocal)};
     return {};
 }
 

@@ -12,7 +12,8 @@ inline constexpr const char *kObjectPath = "/io/github/onedriver/Mount";
 inline constexpr const char *kInterface = "io.github.onedriver.Mount1";
 
 inline constexpr const char *kEmblemCloud = "onedriver-emblem-cloud";
-inline constexpr const char *kEmblemPinned = "emblem-success";
+inline constexpr const char *kEmblemPinned = "onedriver-emblem-pinned";
+inline constexpr const char *kEmblemLocal = "onedriver-emblem-local";
 inline constexpr const char *kEmblemSync = "emblem-synchronizing-symbolic";
 inline constexpr const char *kEmblemError = "emblem-error";
 

@@ -32,8 +32,10 @@ target_link_libraries(onedriveraction onedriver-dolphin-core Qt6::DBus Qt6::Widg
     KF6::KIOCore KF6::KIOWidgets KF6::CoreAddons KF6::I18n)
 install(TARGETS onedriveraction DESTINATION ${KDE_INSTALL_PLUGINDIR}/kf6/kfileitemaction)
 
-# the "not available locally" emblem (the Breeze theme has no cloud emblem)
-install(FILES icons/onedriver-emblem-cloud.svg
+# emblems: cloud (not on this device), local, pinned; Breeze has no cloud
+# emblem and its check marks follow the theme color, so local and pinned
+# would look the same
+install(FILES icons/onedriver-emblem-cloud.svg icons/onedriver-emblem-local.svg icons/onedriver-emblem-pinned.svg
         DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/scalable/emblems)
 
 # translations: msgfmt each po/<lang>.po into the onedriver-dolphin domain
