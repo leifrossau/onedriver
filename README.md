@@ -1,501 +1,265 @@
-[![Run tests](https://github.com/jstaf/onedriver/workflows/Run%20tests/badge.svg)](https://github.com/jstaf/onedriver/actions?query=workflow%3A%22Run+tests%22)
-[![Coverage Status](https://coveralls.io/repos/github/jstaf/onedriver/badge.svg?branch=master)](https://coveralls.io/github/jstaf/onedriver?branch=master)
-[![Copr build status](https://copr.fedorainfracloud.org/coprs/jstaf/onedriver/package/onedriver/status_image/last_build.png)](https://copr.fedorainfracloud.org/coprs/jstaf/onedriver/package/onedriver/)
+# onedriver (fork)
 
-# onedriver
+A fork of [jstaf/onedriver](https://github.com/jstaf/onedriver), the native
+Linux filesystem for Microsoft OneDrive, focused on a Windows-like OneDrive
+experience on Linux and KDE: files appear instantly and are only downloaded
+when used, you can pin folders to keep them offline or free up space again,
+and a tray icon, an activity popup and Dolphin integration show what is going
+on. Many thanks to Jeff Stafford and the upstream contributors for the
+excellent foundation. Licensed under the GPL-3.0, like upstream.
 
-**onedriver is a native Linux filesystem for Microsoft OneDrive.**
+onedriver is not a sync client. It mounts your OneDrive as a FUSE filesystem
+and downloads file content on demand, so you get instant access to _all_ of
+your files without waiting for a full sync.
 
-onedriver is a network filesystem that gives your computer direct access to your
-files on Microsoft OneDrive. This is not a sync client. Instead of syncing
-files, onedriver performs an on-demand download of files when your computer
-attempts to use them. onedriver allows you to use files on OneDrive as if they
-were files on your local computer.
+![The activity popup](docs/images/activity-popup.png)
 
-onedriver is extremely straightforwards to use:
+_The activity popup (screenshot with made-up data)._
 
-- Install onedriver using your favorite installation method.
-- Click the "+" button in the app to setup one or more OneDrive accounts.
-  (There's a command-line workflow for those who prefer doing things that way
-  too!)
-- Just start using your files on OneDrive as if they were normal files.
+<!-- TODO: add a Dolphin screenshot (overlay emblems + OneDrive context menu) as docs/images/dolphin.png -->
 
-I've spent a lot of time trying to make onedriver fast, convenient, and easy to
-use. Though you can use it on servers, the goal here is to make it easy to work
-with OneDrive files on your Linux desktop. This allows you to easily sync files
-between any number of Windows, Mac, and Linux computers. You can setup your
-phone to auto-upload photos to OneDrive and edit and view them on your Linux
-computer. You can switch between LibreOffice on your local computer and the
-Microsoft 365 online apps as needed when working. Want to migrate from Windows
-to Linux? Just throw all your Windows files into OneDrive, add your OneDrive
-account to Linux with onedriver, and call it a day.
+## What's different from upstream
 
-**Microsoft OneDrive works on Linux.**
+- **On-demand partial reads.** Opening a file does not download it; only the
+  parts an application reads are fetched with HTTP Range requests, with
+  read-ahead for sequential reads such as video playback. Reading a few KB of
+  metadata no longer downloads whole photos. See [Partial downloads](#partial-downloads).
+- **Pinning ("always keep on this device") and freeing up space**, per file or
+  folder, plus optional automatic eviction by cache size or age
+  (`cacheLimit`, `evictAfterDays`).
+- **Sync status.** Every file has a state (`cloud`, `local`, `modified`,
+  `uploading`, `error`) exposed as `user.onedriver.*` extended attributes, and
+  every mount exports a [D-Bus status and control interface](docs/dbus-interface.md).
+- **Tray icon** (`onedriver-tray`, StatusNotifierItem) showing up to date /
+  syncing / paused / offline / error, with a menu (open folder, recent files,
+  pause, sync now, quota) and desktop notifications for conflicts, failed
+  uploads and expired logins.
+- **Activity popup** (`onedriver-activity`, Qt6/QML/Kirigami), opened by
+  clicking the tray icon: running and queued transfers with progress, and
+  recently synced files.
+- **Dolphin integration:** Windows-style overlay emblems (cloud, green check
+  for pinned files, syncing, error) and a OneDrive context menu ("Always keep
+  on this device", "Free up space", "View online"), with a Danish translation.
+- **Server-side thumbnails.** OneDrive's own thumbnails are written to the
+  freedesktop thumbnail cache, so file managers do not download every file
+  just to show previews.
+- **Personal Vault** is shown as a locked, empty, read-only folder and never
+  downloaded.
+- **Robust login.** onedriver never pops up a login window by itself and no
+  longer crashes on expired tokens. In the "auth-expired" mode the mount keeps
+  working from the cache, changes are kept locally, and the tray offers a
+  "Log in" action.
+- **Conflict copies.** If a file changes both locally and on OneDrive, the
+  local version is preserved as a conflict copy instead of being silently
+  overwritten.
+- **Offline test suite.** `make test` runs against an in-memory mock of
+  Microsoft Graph; no account or network needed.
+- **Data-loss and stability fixes** found while building the above:
+  - a remote change could overwrite unsaved local edits
+  - a rewrite of a file during its upload was lost
+  - a server-side rename was lost when a local file got its server ID
+  - uploads could stall after retries
+  - `Open()` held a lock during download and froze file managers
+  - files whose size is an exact multiple of 10 MiB failed to download
+  - `truncate(2)` on a never-downloaded file uploaded zeros
+  - missing `gst-plugins-good` broke the Authenticator number-matching login
+    (now a package dependency, with a warning if it is missing)
 
-Getting started with your files on OneDrive is as easy as running:
-`onedriver /path/to/mount/onedrive/at` (there's also a helpful GUI!). To get a
-list of all the arguments onedriver can be run with you can read the manual page
-by typing `man onedriver` or get a quick summary with `onedriver --help`.
+The default log level is now `info` (it used to be `debug`).
 
-## Key features
+## Install
 
-onedriver has several nice features that make it significantly more useful than
-other OneDrive clients:
+### Arch Linux / CachyOS / Manjaro / EndeavourOS
 
-- **Files are only downloaded when you use them.** onedriver will only download
-  a file if you (or a program on your computer) uses that file. You don't need
-  to wait hours for a sync client to sync your entire OneDrive account to your
-  local computer or try to guess which files and folders you might need later
-  while setting up a "selective sync". onedriver gives you instant access to
-  _all_ of your files and only downloads the ones you use.
-
-- **Bidirectional sync.** Although onedriver doesn't actually "sync" any files,
-  any changes that occur on OneDrive will be automatically reflected on your
-  local machine. onedriver will only redownload a file when you access a file
-  that has been changed remotely on OneDrive. If you somehow simultaneously
-  modify a file both locally on your computer and also remotely on OneDrive,
-  your local copy will always take priority (to avoid you losing any local
-  work).
-
-- **Can be used offline.** Files you've opened previously will be available even
-  if your computer has no access to the internet. The filesystem becomes
-  read-only if you lose internet access, and automatically enables write access
-  again when you reconnect to the internet.
-
-- **Fast.** Great care has been taken to ensure that onedriver never makes a
-  network request unless it actually needs to. onedriver caches both filesystem
-  metadata and file contents both in memory and on-disk. Accessing your OneDrive
-  files will be fast and snappy even if you're engaged in a fight to the death
-  for the last power outlet at a coffeeshop with bad wifi. (This has definitely
-  never happened to me before, why do you ask?)
-
-- **Has a user interface.** You can add and remove your OneDrive accounts
-  without ever using the command-line. Once you've added your OneDrive accounts,
-  there's no special interface beyond your normal file browser.
-
-- **Free and open-source.** They're your files. Why should you have to pay to
-  access them? onedriver is licensed under the GPLv3, which means you will
-  _always_ have access to use onedriver to access your files on OneDrive.
-
-## Quick start
-
-### Fedora/CentOS/RHEL
-
-Users on Fedora/CentOS/RHEL systems are recommended to install onedriver from
-[COPR](https://copr.fedorainfracloud.org/coprs/jstaf/onedriver/). This will
-install the latest version of onedriver through your package manager and ensure
-it stays up-to-date with bugfixes and new features.
+Build the package from a checkout of this repository:
 
 ```bash
-sudo dnf copr enable jstaf/onedriver
-sudo dnf install onedriver
+git clone https://github.com/leifrossau/onedriver.git
+cd onedriver/pkg/arch
+makepkg -si
 ```
 
-### OpenSUSE
-
-OpenSUSE users need to add the COPR repo either for Leap or Tumbleweed
+or install the package attached to a
+[release](https://github.com/leifrossau/onedriver/releases):
 
 ```bash
-# Leap 15.4
-sudo zypper addrepo -g -r https://copr.fedorainfracloud.org/coprs/jstaf/onedriver/repo/opensuse-leap-15.4/jstaf-onedriver-opensuse-leap-15.4.repo onedriver
-sudo zypper --gpg-auto-import-keys refresh
-sudo zypper install onedriver
-
-# Tumbleweed
-sudo zypper addrepo -g -r https://copr.fedorainfracloud.org/coprs/jstaf/onedriver/repo/opensuse-tumbleweed/jstaf-onedriver-opensuse-tumbleweed.repo onedriver
-sudo zypper --gpg-auto-import-keys refresh
-sudo zypper install onedriver
+sudo pacman -U onedriver-fork-*.pkg.tar.zst
 ```
 
-### Ubuntu/Pop!\_OS/Debian
+The package is called `onedriver-fork` and conflicts with the upstream
+`onedriver` package (pacman will offer to replace it). It installs onedriver,
+the launcher, the tray, the activity popup and the Dolphin plugins. The
+systemd unit and binary paths are unchanged, so existing
+`onedriver@<path>.service` mounts keep working; restart them to pick up the new
+binary. More in [pkg/arch/README.md](pkg/arch/README.md).
 
-Ubuntu/Pop!\_OS/Debian users can install onedriver from the
-[OpenSUSE Build Service](https://software.opensuse.org/download.html?project=home%3Ajstaf&package=onedriver)
-(despite the name, OBS also does a nice job of building packages for Debian).
-Like the COPR install, this will enable you to install onedriver through your
-package manager and install updates as they become available. If you previously
-installed onedriver via PPA, you can purge the old PPA from your system via:
-`sudo add-apt-repository --remove ppa:jstaf/onedriver`
-
-### Arch/Manjaro/EndeavourOS
-
-Arch/Manjaro/EndeavourOS users can install onedriver from the
-[AUR](https://aur.archlinux.org/packages/onedriver/).
-
-Post-installation, you can start onedriver either via the `onedriver-launcher`
-desktop app, or via the command line: `onedriver /path/to/mount/onedrive/at/`.
-
-### Gentoo
-
-Gentoo users can install onedriver from
-[this ebuild overlay](https://github.com/foopsss/gentoo-overlay) provided by a user. If
-you don't want to add user-hosted overlays to your system you may copy the
-ebuild for the latest version to a local overlay, which can be created by
-following the instructions available in the
-[Gentoo Wiki](https://wiki.gentoo.org/wiki/Creating_an_ebuild_repository).
-
-Make sure to carefully review the ebuild for the package before installing it
-
-### NixOS/NixPkgs
-
-NixOS and Nix users can install onedriver from
-[the unstable channel](https://search.nixos.org/packages?channel=unstable&query=onedriver)
-either by adding the package to their system's configuration (if they are using
-NixOS) or by installing it manually via `nix-env -iA unstable.onedriver`.
-
-## Multiple drives and starting OneDrive on login via systemd
-
-**Note:** You can also set this up through the GUI via the `onedriver-launcher`
-desktop app installed via rpm/deb/`make install`. You can skip this section if
-you're using the GUI. It's honestly easier.
-
-To start onedriver automatically and ensure you always have access to your
-files, you can start onedriver as a systemd user service. In this example,
-`$MOUNTPOINT` refers to where we want OneDrive to be mounted at (for instance,
-`~/OneDrive`).
+Log in once (this opens the login window; the launcher can do it too), then
+enable the mount as a service:
 
 ```bash
-# create the mountpoint and determine the service name
-mkdir -p $MOUNTPOINT
-export SERVICE_NAME=$(systemd-escape --template onedriver@.service --path $MOUNTPOINT)
-
-# mount onedrive and set it to automatically mount on login
-systemctl --user daemon-reload
-systemctl --user enable --now $SERVICE_NAME
-
-# check onedriver's logs for the current day
-journalctl --user -u $SERVICE_NAME --since today
+mkdir -p ~/OneDrive
+onedriver ~/OneDrive      # log in, then stop it with ctrl-c
+systemctl --user enable --now onedriver@$(systemd-escape --path ~/OneDrive).service
 ```
 
-## Login expired
-
-If renewing the login fails because of the network or a server problem,
-onedriver keeps the old token and retries in the background with a growing
-delay (one warning in the log). If Microsoft definitively rejects the stored
-login (e.g. `invalid_grant`, you changed your password or revoked the app),
-onedriver never opens a login window by itself and never exits: the mount
-keeps working from the cache, changes are kept locally and uploaded after you
-log in, the tray shows "Login expired" and a notification offers "Log in" (the
-`Login()` D-Bus method). Started from a terminal, onedriver still asks for
-the login at startup as before; started as a service without a terminal it
-starts in this logged-out mode. Without a display (or with `-n`) run
-`onedriver -n <mountpoint>` in a terminal to log in again.
-
-The default log level is now `info` (it used to be `debug`); change it with
-`-l/--log` or `log:` in the config file. Existing config files that say
-`log: debug` keep that setting.
-
-## Tray icon
-
-`onedriver-tray` shows the state of all running onedriver mounts as a system
-tray icon (StatusNotifierItem, so KDE Plasma and any desktop with a tray
-host work). The icon shows up to date / syncing / paused / offline / error,
-the tooltip lists pending uploads and downloads and the last sync time, and
-the menu offers "Open folder", recent files, "Pause syncing", "Sync now" and
-the quota. Conflicts, failed uploads and expired logins are shown as desktop
-notifications. It talks to onedriver over D-Bus (see
-[docs/dbus-interface.md](docs/dbus-interface.md)), so the mounts have to be
-running; it starts automatically on login after installing the package. To run
-it by hand: `onedriver-tray`.
-
-A left click on the icon (or "Show activity" in the menu) toggles the activity
-window, `onedriver-activity`, which lists running and queued transfers and
-recent activity. The tray starts it if it is not running; if it is not
-installed, a left click opens the mount's folder instead.
-
-## Activity window
-
-`onedriver-activity` is the popup that opens when you click the tray icon,
-similar to the OneDrive flyout on Windows: it shows the overall state and
-storage use, the files being uploaded or downloaded right now with progress,
-and the recently synced files (click to open, right click for "Open folder" /
-"View online"). Footer buttons open the folder, pause/resume, sync now, and
-start the settings. It reads everything from the D-Bus interface above and
-only does work while it is visible. It is a Qt6/QML program (Kirigami, and
-LayerShellQt to anchor it above the panel on Wayland) and is built separately
-from the Go programs:
+The tray starts automatically at the next login (`/etc/xdg/autostart`); to start
+it now run `onedriver-tray`. Exclude the mount from KDE's Baloo indexer, which
+would otherwise read (download) every file:
 
 ```bash
-# Arch: sudo pacman -S cmake extra-cmake-modules qt6-base qt6-declarative kirigami layer-shell-qt
-make activity            # cmake -S activity -B build/activity && cmake --build build/activity
-make test-activity       # unit tests for the models and helpers
-sudo make install-activity
-onedriver-activity --show   # starts it and shows the window; a second call toggles it
+balooctl6 config add excludeFolders ~/OneDrive
 ```
 
-At runtime it needs `qt6-declarative`, `kirigami` and (recommended)
-`qqc2-desktop-style`. Without `layer-shell-qt` at build time the window is
-placed bottom-right with plain Qt, which only works on X11. The tray starts
-it and toggles it through `io.github.onedriver.Activity1.Toggle`.
+### Other distributions: build from source
 
-## Dolphin integration
-
-Like the OneDrive integration in Windows Explorer, Dolphin (and other KDE file
-managers) can show the sync state of each file and offer OneDrive actions. It
-is a KF6 plugin pair in `dolphin/`, built separately (not part of `make all`):
+You need Go, a C compiler, `pkg-config`, FUSE 3 and development headers for
+`webkit2gtk-4.1` and `json-glib`, and `gst-plugins-good` at runtime. The
+optional parts need cmake, `extra-cmake-modules` and Qt 6 (`qt6-base`,
+`qt6-declarative`) with Kirigami and (recommended) LayerShellQt for the activity
+popup, and KF6 `kio` and `ki18n` for the Dolphin plugins.
 
 ```bash
-# Arch: sudo pacman -S cmake extra-cmake-modules qt6-base kio ki18n
-make dolphin          # cmake -S dolphin -B build/dolphin && cmake --build build/dolphin
-make test-dolphin
-sudo make install-dolphin PREFIX=/usr
+make                  # onedriver, onedriver-launcher, onedriver-tray
+make activity         # the activity popup
+make dolphin          # the Dolphin plugins
+sudo make install install-activity install-dolphin PREFIX=/usr
 ```
 
-Restart Dolphin afterwards (`killall dolphin`); plugins are loaded at startup.
-No setting needs to be enabled: overlay icon plugins (`kf6/overlayicon`) are
-always loaded by KIO, and the context menu entry is a file item action plugin
-(`kf6/kfileitemaction`) that can be switched off in Dolphin under
-Configure > Context Menu > Services if you do not want it.
+The Fedora spec file and Debian packaging inherited from upstream are still in
+the tree but are **untested for this fork**. The Copr, OBS, AUR, Nix and Gentoo
+packages mentioned in upstream's README install _upstream_ onedriver, not this
+fork.
 
-Emblems (read from the `user.onedriver.state` / `user.onedriver.pinned`
-extended attributes, so there is no D-Bus call per file):
+## Usage
 
-| State | Emblem |
-|---|---|
-| online only (`cloud`) | blue cloud (`onedriver-emblem-cloud`, shipped by the plugin) |
-| `local` and pinned | green check (`emblem-success`) |
-| `modified` / `uploading` | `emblem-synchronizing-symbolic` |
-| `error` | `emblem-error` |
-| `local`, not pinned | none |
+Mount from the command line with `onedriver /path/to/mountpoint` (see
+`onedriver --help` and `man onedriver`), via the `onedriver-launcher` desktop
+app, or as a systemd user service as above. Logs:
+`journalctl --user -u onedriver@<escaped path>.service --since today`.
 
-Folders only show the pinned, syncing and error emblems. The plugin follows
-the `FileStatesChanged` D-Bus signal (daemon interface v1.3) so emblems update
-live; with an older daemon they update when the folder is reloaded.
+### Pinning and freeing up space
 
-The context menu gets a "OneDrive" submenu for any selection inside an
-onedriver mount: "Always keep on this device" (checkable), "Free up space" and,
-for a single item, "View online".
-
-## Pinning / free up space
-
-Files are normally only downloaded when you open them. Like "Always keep on
-this device" on Windows, you can pin files or folders so their content is
-downloaded in the background and kept up to date, so they are available
-offline. Pinning a folder pins everything inside it, including files that are
-added to it later; moving a file out of a pinned folder unpins it (unless it
-was pinned itself).
+In Dolphin: right click files or folders, then OneDrive > "Always keep on this
+device" or "Free up space". On the command line:
 
 ```bash
-# pin a file or folder (returns immediately, downloads happen in the background)
+# pin (returns immediately, downloads happen in the background);
+# a pinned folder includes files added to it later
 setfattr -n user.onedriver.pinned -v 1 ~/OneDrive/Documents
-
-# is it pinned? (1 or 0, also 1 for items inside a pinned folder)
-getfattr -n user.onedriver.pinned --only-values ~/OneDrive/Documents/report.docx
-
 # unpin (keeps the downloaded content)
 setfattr -n user.onedriver.pinned -v 0 ~/OneDrive/Documents
-# or equivalently
-setfattr -x user.onedriver.pinned ~/OneDrive/Documents
+# is it pinned? (also 1 for items inside a pinned folder)
+getfattr -n user.onedriver.pinned --only-values ~/OneDrive/Documents/report.docx
 
-# "free up space": drop the downloaded content of a file or of everything in a
-# folder. The files stay visible and are downloaded again when opened. Pinned,
-# open and not yet uploaded files are skipped.
+# free up space: drop downloaded content, files stay visible and are fetched
+# again when opened. Pinned, open and not yet uploaded files are skipped.
 setfattr -n user.onedriver.evict -v 1 ~/OneDrive/Pictures
 
-# where is a file in its sync lifecycle? (cloud, local, modified, uploading, error)
+# sync state: cloud, local, modified, uploading or error
 getfattr -n user.onedriver.state --only-values ~/OneDrive/Documents/report.docx
 ```
 
-Cached content of files that are not pinned can also be evicted automatically.
-This is off by default and enabled in the config file
-(`~/.config/onedriver/config.yml`):
-
-```yaml
-# maximum size of cached file content ("500M", "10G", or bytes); when exceeded,
-# the least recently opened unpinned content is evicted
-cacheLimit: 10G
-# evict unpinned content that was not opened for this many days
-evictAfterDays: 30
-```
-
-Only content that is not pinned, not open, and has no local changes waiting to
-be uploaded is ever evicted.
-
 ### Partial downloads
 
-Opening a file does not download it. Only the parts an application actually
-reads are fetched (in chunks of 256 KiB, with a growing read-ahead of up to
-8 MiB when a file is read sequentially, e.g. video playback), so a file
-manager reading a few KB of metadata (image dimensions, EXIF, PDF info) does
-not download whole photos or documents. Files of up to 1 MiB are downloaded
-in one go on their first read. A partially downloaded file stays in the
-`cloud` state; once every byte has been read it is checked against OneDrive's
-QuickXorHash and becomes `local` (on a mismatch it is downloaded again in
-full). Before a file is changed (written to, truncated or opened for
-writing) it is always downloaded completely, and pinned files are always
-downloaded completely. Reading parts that are not downloaded yet fails with an
-I/O error while offline.
+Only the parts an application reads are fetched (256 KiB chunks, read-ahead
+growing to 8 MiB for sequential reads); files up to 1 MiB are fetched in one go.
+A partially downloaded file stays in the `cloud` state. Once every byte has been
+read it is verified against OneDrive's QuickXorHash and becomes `local`; on a
+mismatch it is downloaded again. Files are always downloaded completely before
+they are modified, and pinned files are always downloaded completely. Reading
+parts that are not cached fails with an I/O error while offline.
 
-## Thumbnails in file managers
+### Configuration
 
-File managers like Dolphin or Nautilus create previews by opening each image or
-document, which would download every file in a folder. To avoid that, when a
-folder is listed onedriver fetches OneDrive's own thumbnails (images, videos,
-PDFs and Office documents) for files that are not stored locally and writes them
-to the shared thumbnail cache (`$XDG_CACHE_HOME/thumbnails/{normal,large,x-large}`,
-see the [freedesktop thumbnail specification](https://specifications.freedesktop.org/thumbnail-spec/latest/)),
-so the file manager finds a valid thumbnail and never opens the file. At most
-two thumbnails are fetched at a time, at most 120 per minute, and not while
-syncing is paused or the mount is offline. Turn it off in the config file:
+`~/.config/onedriver/config.yml` (an annotated example is in
+[pkg/resources/config-example.yml](pkg/resources/config-example.yml)):
 
 ```yaml
-serverThumbnails: false
+log: info            # trace, debug, info, warn, error, fatal (or -l/--log)
+cacheDir: ~/.cache/onedriver
+cacheLimit: 10G      # evict least recently used unpinned content above this size (default: off)
+evictAfterDays: 30   # evict unpinned content not opened for this long (default: off)
+serverThumbnails: true  # fill the thumbnail cache with OneDrive's thumbnails (default: on)
 ```
 
-Note: also exclude the mountpoint from KDE's Baloo file indexer, which would
-otherwise read (download) every file: `balooctl6 config add excludeFolders ~/OneDrive`
-(or System Settings > Search > File Search).
+Only content that is not pinned, not open, and has no local changes waiting for
+upload is ever evicted.
 
-## D-Bus interface
-
-Every running onedriver exports its status and some controls (pause/resume,
-sync now, recent activity, pinning, ...) on the session bus, under the name
-`io.github.onedriver.Mount.<escaped mountpoint>`. See
-[docs/dbus-interface.md](docs/dbus-interface.md) for the full interface.
+### D-Bus
 
 ```bash
 busctl --user list | grep io.github.onedriver
-busctl --user introspect io.github.onedriver.Mount.home_me_OneDrive /io/github/onedriver/Mount
 busctl --user call io.github.onedriver.Mount.home_me_OneDrive /io/github/onedriver/Mount \
     io.github.onedriver.Mount1 GetStatus
 busctl --user call io.github.onedriver.Mount.home_me_OneDrive /io/github/onedriver/Mount \
     io.github.onedriver.Mount1 Pause
 ```
 
-## Building onedriver yourself
+The bus name is derived from the escaped mountpoint; the full interface
+(properties, transfers, `FileStatesChanged`, `Login`, ...) is documented in
+[docs/dbus-interface.md](docs/dbus-interface.md).
 
-In addition to the traditional [Go tooling](https://golang.org/dl/), you will
-need a C compiler and development headers for `webkit2gtk-4.1` and `json-glib`.
-On Fedora, these can be obtained with
-`dnf install golang gcc pkg-config webkit2gtk4.1-devel json-glib-devel`. On
-Ubuntu, these dependencies can be installed with
-`apt install golang gcc pkg-config libwebkit2gtk-4.1-dev libjson-glib-dev`.
+### Login expired
 
-```bash
-# to build and run the binary
-make
-mkdir mount
-./onedriver mount/
+If Microsoft rejects the stored login (password changed, app access revoked),
+onedriver does not open a window or exit. The mount keeps serving cached files,
+changes are kept locally and uploaded after you log in. The tray shows "Login
+expired" with a "Log in" action. Without a display, run
+`onedriver -n <mountpoint>` in a terminal.
 
-# in new window, check out the mounted filesystem
-ls -l mount
-
-# unmount the filesystem
-fusermount3 -uz mount
-# you can also just "ctrl-c" onedriver to unmount it
-```
-
-### Running the tests
-
-By default the tests run against an in-memory fake of Microsoft Graph
-(`fs/graph/mockgraph`), so they need **no OneDrive account, no secrets and no
-network access** - only FUSE (`fusermount3` works fine without root):
+## Development
 
 ```bash
-# run the whole fs/ test suite against the mock server
-make test
+make test        # mock-Graph suite for ./fs/... and the tray; no account, needs FUSE
+make test-race   # the same with the race detector
+make test-activity test-dolphin   # Qt/KF6 unit tests
 
-# the same, with the race detector
-make test-race
-
-# or directly
-go test -count=1 -timeout 300s ./fs/...
+# the live suite writes to /onedriver_tests in your own account (run make test-init first)
+ONEDRIVER_TEST_LIVE=1 make test-live
 ```
 
-The suite mounts a real FUSE filesystem in a temporary directory and removes it
-afterwards. Tests that can only be meaningful against the real service (the
-offline tests, which need `sudo` to cut off network access, and anything that
-relies on Microsoft-specific behavior) are skipped with a message explaining
-why.
+Layout:
 
-To also test against a real account, opt in with `ONEDRIVER_TEST_LIVE=1`. The
-live tests write and delete files/folders on your onedrive account at the path
-`/onedriver_tests`. Note that the offline test suite requires `sudo` to remove
-network access to simulate being offline.
+| Path | Contents |
+|---|---|
+| `cmd/onedriver/`, `cmd/onedriver-launcher/` | the filesystem daemon and the GTK launcher |
+| `cmd/onedriver-tray/` | tray icon and notifications (pure Go, talks D-Bus) |
+| `fs/` | FUSE filesystem: cache, delta sync, uploads, pinning, partial reads, thumbnails |
+| `fs/graph/` | Microsoft Graph client and auth; `fs/graph/mockgraph` is the test mock |
+| `fs/dbus/` | the D-Bus status/control service |
+| `activity/` | the activity popup (Qt6/QML/Kirigami, CMake) |
+| `dolphin/` | Dolphin overlay icons and context menu (KF6, CMake) |
+| `pkg/arch/` | Arch PKGBUILD; `pkg/resources/`: service, desktop files, man page, config example |
+| `docs/` | [D-Bus interface](docs/dbus-interface.md) |
 
-```bash
-# setup test tooling for first time run
-make test-init
-
-# run the tests against your own account (includes the offline tests)
-make test-live
-```
-
-### Installation from source
-
-onedriver has multiple installation methods depending on your needs.
-
-```bash
-# install directly from source
-make
-sudo make install
-
-# create an RPM for system-wide installation on RHEL/CentOS/Fedora using mock
-sudo dnf install golang gcc webkit2gtk3-devel json-glib-devel pkg-config git \
-    rsync rpmdevtools rpm-build mock
-sudo usermod -aG mock $USER
-newgrp mock
-make rpm
-
-# create a .deb for system-wide installation on Ubuntu/Debian using pbuilder
-sudo apt update
-sudo apt install golang gcc libwebkit2gtk-4.0-dev libjson-glib-dev pkg-config git \
-    rsync devscripts debhelper build-essential pbuilder
-sudo pbuilder create  # may need to add "--distribution focal" on ubuntu
-make deb
-```
+To regenerate the screenshot, run `onedriver-activity` with
+`QT_QPA_PLATFORM=offscreen ONEDRIVER_ACTIVITY_SCREENSHOT=out.png` on a session
+bus that has a fake `io.github.onedriver.Mount1` service.
 
 ## Troubleshooting
 
-During your OneDrive travels, you might hit a bug that I haven't squashed yet.
-Don't panic! In most cases, the filesystem will report what happened to whatever
-program you're using. (As an example, an error mentioning a "read-only
-filesystem" indicates that your computer is currently offline.)
+In most cases the filesystem reports problems to the program using it (for
+example, "read-only filesystem" means you are offline). If it appears to hang,
+unmount and remount: `fusermount3 -uz $MOUNTPOINT`, then restart the service.
+To reset everything (deletes all locally cached data) run `onedriver -w`.
 
-If the filesystem appears to hang or "freeze" indefinitely, its possible the
-fileystem has crashed. To resolve this, just restart the program by unmounting
-and remounting things via the GUI or by running `fusermount3 -uz $MOUNTPOINT` on
-the command-line.
+For bug reports, the most useful things are the logs and steps to reproduce:
+`journalctl --user -u onedriver@<escaped path>.service --since today`.
 
-If you really want to go back to a clean slate, onedriver can be completely
-reset (delete all cached local data) by deleting mounts in the GUI or running
-`onedriver -w`.
+## Known issues
 
-If you encounter a bug or have a feature request, open an issue in the "Issues"
-tab here on GitHub. The two most informative things you can put in a bug report
-are the logs from the bug/just before encountering the bug (get logs via
-`journalctl --user -u $SERVICE_NAME --since today` ... see docs for correct
-value of `$SERVICE_NAME`) and/or instructions on how to reproduce the issue.
-Otherwise I have to guess what the problem is :disappointed:
-
-## Known issues & disclaimer
-
-Many file browsers (like
-[GNOME's Nautilus](https://gitlab.gnome.org/GNOME/nautilus/-/issues/1209)) will
-attempt to automatically download all files within a directory in order to
-create thumbnail images. This is somewhat annoying, but only needs to happen
-once - after the initial thumbnail images have been created, thumbnails will
-persist between filesystem restarts.
-
-Microsoft does not support symbolic links (or anything remotely like them) on
-OneDrive. Attempting to create symbolic links within the filesystem returns
-ENOSYS (function not implemented) because the functionality hasn't been
-implemented... by Microsoft. Similarly, Microsoft does not expose the OneDrive
-Recycle Bin APIs - if you want to empty or restore the OneDrive Recycle Bin, you
-must do so through the OneDrive web UI (onedriver uses the native system
-trash/restore functionality independently of the OneDrive Recycle Bin).
-
-onedriver loads files into memory when you access them. This makes things very
-fast, but obviously doesn't work very well if you have very large files. Use a
-sync client like [rclone](https://rclone.org/) if you need the ability to copy
-multi-gigabyte files to OneDrive.
-
-OneDrive is not a good place to backup files to. Use a tool like
-[restic](https://restic.net/) or [borg](https://www.borgbackup.org/) if you're
-looking for a reliable encrypted backup tool. I know some of you want to "back
-up your files to OneDrive". Don't do it. Restic and Borg are better in every
-possible way than any OneDrive client ever will be when it comes to creating
-backups you can count on.
-
-Finally, this project is still in active development and is provided AS IS.
-There are no guarantees. It might kill your cat.
+- This fork is KDE/Plasma focused and has only been tested on Arch-based Linux.
+  The tray works with any StatusNotifierItem host; the activity popup and
+  Dolphin plugins need Qt 6 / KF6.
+- Partial reads are verified against OneDrive's hash only once the whole file
+  has been fetched.
+- Other file managers (Nautilus, ...) work for the filesystem itself but have
+  no overlay emblems; with server thumbnails they should not download files for
+  previews.
+- Microsoft does not support symbolic links on OneDrive (creating one returns
+  `ENOSYS`), and does not expose the OneDrive Recycle Bin API; use the web UI
+  for that.
+- OneDrive is not a backup target; use restic or borg for backups. For
+  multi-gigabyte transfers a tool like [rclone](https://rclone.org/) is better
+  suited.
+- This is a personal project, provided AS IS, with no guarantees.

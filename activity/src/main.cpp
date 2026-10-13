@@ -9,6 +9,7 @@
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QTimer>
 
 int main(int argc, char *argv[])
 {
@@ -57,6 +58,17 @@ int main(int argc, char *argv[])
 
     if (app.arguments().contains(QStringLiteral("--show"))) {
         popup.Toggle();
+    }
+
+    // Opt-in, for documentation screenshots: ONEDRIVER_ACTIVITY_SCREENSHOT=file.png
+    // shows the window, saves it to that file after ~1.5 s and quits.
+    const QString shot = qEnvironmentVariable("ONEDRIVER_ACTIVITY_SCREENSHOT");
+    if (!shot.isEmpty()) {
+        popup.Toggle();
+        QTimer::singleShot(1500, &app, [window, shot] {
+            const bool ok = window->grabWindow().save(shot);
+            QCoreApplication::exit(ok ? 0 : 1);
+        });
     }
     return app.exec();
 }
