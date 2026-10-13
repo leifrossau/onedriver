@@ -37,21 +37,25 @@ _The activity popup (screenshot with made-up data)._
 - **Activity popup** (`onedriver-activity`, Qt6/QML/Kirigami), opened by
   clicking the tray icon: running and queued transfers with progress, and
   recently synced files.
-- **Dolphin integration:** Windows-style overlay emblems (cloud, green check
-  for pinned files, syncing, error) and a OneDrive context menu ("Always keep
+- **Dolphin integration:** Windows-style overlay emblems (cloud for online-only
+  files, outline check for files on this device, solid green check for pinned
+  files, syncing, error) and a OneDrive context menu ("Always keep
   on this device", "Free up space", "View online"), with a Danish translation.
 - **Server-side thumbnails.** OneDrive's own thumbnails are written to the
   freedesktop thumbnail cache, so file managers do not download every file
   just to show previews.
 - **Personal Vault** is shown as a locked, empty, read-only folder and never
   downloaded.
-- **Robust login.** onedriver never pops up a login window by itself and no
-  longer crashes on expired tokens. In the "auth-expired" mode the mount keeps
-  working from the cache, changes are kept locally, and the tray offers a
-  "Log in" action.
-- **Conflict copies.** If a file changes both locally and on OneDrive, the
-  local version is preserved as a conflict copy instead of being silently
-  overwritten.
+- **Robust login.** When a login expires, the background service no longer
+  opens a login window on its own or crashes. Temporary network or server
+  errors are retried; in the "auth-expired" mode the mount keeps working from
+  the cache, changes are kept locally, and the tray offers a "Log in" action.
+  (The very first login still opens the login window, as before.)
+- **Conflict copies.** If a file changes on OneDrive while it has local
+  changes that are not uploaded yet, the local version is kept and the
+  server's version is saved next to it as
+  `name (conflict <host> <date>).ext`, instead of the local changes being
+  silently overwritten.
 - **Offline test suite.** `make test` runs against an in-memory mock of
   Microsoft Graph; no account or network needed.
 - **Data-loss and stability fixes** found while building the above:
