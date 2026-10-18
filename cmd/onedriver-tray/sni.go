@@ -39,10 +39,10 @@ type sni struct {
 	conn       *dbus.Conn
 	props      *prop.Properties
 	busName    string
-	onActivate func()
+	onActivate func(x, y int32)
 }
 
-func newSNI(conn *dbus.Conn, onActivate func()) (*sni, error) {
+func newSNI(conn *dbus.Conn, onActivate func(x, y int32)) (*sni, error) {
 	s := &sni{conn: conn, onActivate: onActivate}
 	s.busName = fmt.Sprintf("org.kde.StatusNotifierItem-%d-1", os.Getpid())
 	reply, err := conn.RequestName(s.busName, dbus.NameFlagDoNotQueue)
@@ -135,7 +135,7 @@ func (s *sni) WatchWatcher(ch <-chan *dbus.Signal, done <-chan struct{}) {
 	}
 }
 
-func (s *sni) Activate(x, y int32) *dbus.Error          { go s.onActivate(); return nil }
+func (s *sni) Activate(x, y int32) *dbus.Error          { go s.onActivate(x, y); return nil }
 func (s *sni) SecondaryActivate(x, y int32) *dbus.Error { return nil }
 func (s *sni) ContextMenu(x, y int32) *dbus.Error       { return nil }
 func (s *sni) Scroll(delta int32, orientation string) *dbus.Error {
