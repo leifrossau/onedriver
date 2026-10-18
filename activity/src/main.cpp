@@ -57,7 +57,21 @@ int main(int argc, char *argv[])
     bus.registerObject(QString::fromLatin1(Popup::ObjectPath), &popup, QDBusConnection::ExportScriptableSlots);
 
     if (app.arguments().contains(QStringLiteral("--show"))) {
-        popup.Toggle();
+        // --at=X,Y: open next to this point (the tray icon) instead of in the corner
+        QStringList at;
+        for (const QString &arg : app.arguments()) {
+            if (arg.startsWith(QLatin1String("--at="))) {
+                at = arg.mid(5).split(QLatin1Char(','));
+            }
+        }
+        bool okX = false, okY = false;
+        const int x = at.value(0).toInt(&okX);
+        const int y = at.value(1).toInt(&okY);
+        if (okX && okY) {
+            popup.ToggleAt(x, y);
+        } else {
+            popup.Toggle();
+        }
     }
 
     // Opt-in, for documentation screenshots: ONEDRIVER_ACTIVITY_SCREENSHOT=file.png

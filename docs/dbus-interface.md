@@ -117,7 +117,10 @@ file) and listen to `FileStatesChanged` to refresh what is on screen.
 `onedriver-activity` (the popup shown when the tray icon is clicked) owns
 `io.github.onedriver.Activity` on the session bus, object path
 `/io/github/onedriver/Activity`, interface `io.github.onedriver.Activity1`
-with one method, `Toggle() → ()`, which shows the window if hidden and hides
-it if shown. A second `onedriver-activity` process calls `Toggle` on the
-running one and exits. The tray's left click (SNI `Activate`) calls `Toggle`,
-and starts `onedriver-activity` if the name has no owner.
+with two methods: `Toggle() → ()` shows the window in the bottom right corner
+of the primary screen if hidden and hides it if shown; `ToggleAt(i x, i y) → ()`
+does the same but opens the window next to the point (x, y), in global screen
+coordinates, on the screen that contains it. A second `onedriver-activity` process calls `Toggle` on the
+running one and exits. The tray's left click (SNI `Activate`) calls `ToggleAt` with the position of
+the click (`Toggle` if the host reports none), and starts `onedriver-activity
+--show --at=X,Y` if the name has no owner.

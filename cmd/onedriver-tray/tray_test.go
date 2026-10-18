@@ -147,7 +147,15 @@ type env struct {
 }
 
 // fakeActivity is the onedriver-activity side of Activity1.
-type fakeActivity struct{ toggles chan struct{} }
+type fakeActivity struct {
+	toggles chan struct{}
+	toggled chan [2]int32 // ToggleAt calls
+}
+
+func (f *fakeActivity) ToggleAt(x, y int32) *dbus.Error {
+	f.toggled <- [2]int32{x, y}
+	return nil
+}
 
 func (f *fakeActivity) Toggle() *dbus.Error {
 	f.toggles <- struct{}{}
@@ -298,9 +306,10 @@ func TestActivityToggleAndStart(t *testing.T) {
 	d.start(t)
 	require.Eventually(t, func() bool { return len(e.tray.Instances()) == 1 }, 3*time.Second, 20*time.Millisecond)
 	sniObj := e.client.Object(e.tray.sni.busName, sniPath)
-	activate := func() {
-		require.NoError(t, sniObj.Call(sniIface+".Activate", 0, int32(0), int32(0)).Err)
+	activateAt := func(x, y int32) {
+		require.NoError(t, sniObj.Call(sniIface+".Activate", 0, x, y).Err)
 	}
+	activate := func() { activateAt(0, 0) }
 	expectRun := func(want ...string) {
 		select {
 		case r := <-e.ran:
@@ -319,6 +328,10 @@ func TestActivityToggleAndStart(t *testing.T) {
 	activate()
 	expectRun("onedriver-activity", "--show")
 
+	// the click position is handed to the new window
+	activateAt(1900, 1060)
+	expectRun("onedriver-activity", "--show", "--at=1900,1060")
+
 	// the menu item does the same
 	menu := e.client.Object(e.tray.sni.busName, menuPath)
 	id, ok := e.layout(t).find(t, "Show activity")
@@ -327,7 +340,7 @@ func TestActivityToggleAndStart(t *testing.T) {
 	expectRun("onedriver-activity", "--show")
 
 	// running: Toggle is called, nothing is started
-	act := &fakeActivity{toggles: make(chan struct{}, 4)}
+	act := &fakeActivity{toggles: make(chan struct{}, 4), toggled: make(chan [2]int32, 4)}
 	ac := connect(t, e.addr)
 	require.NoError(t, ac.Export(act, activityObj, activityIface))
 	_, err := ac.RequestName(activityName, dbus.NameFlagDoNotQueue)
@@ -337,6 +350,13 @@ func TestActivityToggleAndStart(t *testing.T) {
 	case <-act.toggles:
 	case <-time.After(3 * time.Second):
 		t.Fatal("Toggle was not called")
+	}
+	activateAt(1900, 1060)
+	select {
+	case p := <-act.toggled:
+		assert.Equal(t, [2]int32{1900, 1060}, p)
+	case <-time.After(3 * time.Second):
+		t.Fatal("ToggleAt was not called")
 	}
 	require.NoError(t, menu.Call(menuIface+".Event", 0, id, "clicked", dbus.MakeVariant(""), uint32(0)).Err)
 	select {

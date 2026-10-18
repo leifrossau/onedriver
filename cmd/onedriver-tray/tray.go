@@ -316,8 +316,8 @@ func (t *Tray) rebuild() {
 // activate is the left click: toggle the activity window, starting
 // onedriver-activity if it is not running, and fall back to opening the first
 // instance's folder if it is not installed.
-func (t *Tray) activate() {
-	if t.showActivity() {
+func (t *Tray) activate(x, y int32) {
+	if t.showActivity(x, y) {
 		return
 	}
 	t.activateFallback()
@@ -334,16 +334,27 @@ func (t *Tray) activateFallback() {
 	t.Do(Action{Kind: ActOpenFolder, Arg: insts[0].MountPoint})
 }
 
-// showActivity toggles the activity window. It returns false if there is no
-// activity window to show (the program is not installed or could not be
-// reached).
-func (t *Tray) showActivity() bool {
+// showActivity toggles the activity window, opening it next to (x, y), the
+// global position of the click on the tray icon. Hosts that do not report the
+// position send (0, 0), which opens the window in its default corner. It
+// returns false if there is no activity window to show (the program is not
+// installed or could not be reached).
+func (t *Tray) showActivity(x, y int32) bool {
+	positioned := x != 0 || y != 0
 	c, cancel := ctx()
 	defer cancel()
 	var hasOwner bool
 	err := t.conn.BusObject().CallWithContext(c, "org.freedesktop.DBus.NameHasOwner", 0, activityName).Store(&hasOwner)
 	if err == nil && hasOwner {
-		err = t.conn.Object(activityName, activityObj).CallWithContext(c, activityIface+".Toggle", 0).Err
+		obj := t.conn.Object(activityName, activityObj)
+		if positioned {
+			err = obj.CallWithContext(c, activityIface+".ToggleAt", 0, x, y).Err
+			if isUnknownMethod(err) { // an activity window from before ToggleAt
+				err = obj.CallWithContext(c, activityIface+".Toggle", 0).Err
+			}
+		} else {
+			err = obj.CallWithContext(c, activityIface+".Toggle", 0).Err
+		}
 		if err != nil {
 			log.Warn().Err(err).Msg("Could not toggle the activity window.")
 			return false
@@ -354,7 +365,11 @@ func (t *Tray) showActivity() bool {
 		return false
 	}
 	// without --show onedriver-activity starts hidden
-	t.opts.Run(activityBin, "--show")
+	if positioned {
+		t.opts.Run(activityBin, "--show", fmt.Sprintf("--at=%d,%d", x, y))
+	} else {
+		t.opts.Run(activityBin, "--show")
+	}
 	return true
 }
 
@@ -367,14 +382,13 @@ func (t *Tray) login(instance string) {
 	if err == nil {
 		return
 	}
-	var derr dbus.Error
-	if errors.As(err, &derr) && (derr.Name == "org.freedesktop.DBus.Error.UnknownMethod" ||
-		derr.Name == "org.freedesktop.DBus.Error.UnknownObject") {
+	if isUnknownMethod(err) {
 		t.opts.Run("onedriver-launcher")
 		return
 	}
 	log.Warn().Err(err).Msg("Login() failed.")
 	msg := err.Error()
+	var derr dbus.Error
 	if errors.As(err, &derr) && len(derr.Body) > 0 {
 		if s, ok := derr.Body[0].(string); ok {
 			msg = s
@@ -391,7 +405,7 @@ func (t *Tray) Do(a Action) {
 	case ActSettings:
 		t.opts.Run("onedriver-launcher")
 	case ActActivity:
-		if !t.showActivity() {
+		if !t.showActivity(0, 0) {
 			t.activateFallback()
 		}
 	case ActQuit:
@@ -406,4 +420,12 @@ func (t *Tray) Do(a Action) {
 			log.Warn().Err(err).Str("method", method).Msg("D-Bus call failed.")
 		}
 	}
+}
+
+// isUnknownMethod reports whether err says the called object or method does
+// not exist, which is what an older version of the callee answers.
+func isUnknownMethod(err error) bool {
+	var derr dbus.Error
+	return errors.As(err, &derr) && (derr.Name == "org.freedesktop.DBus.Error.UnknownMethod" ||
+		derr.Name == "org.freedesktop.DBus.Error.UnknownObject")
 }
