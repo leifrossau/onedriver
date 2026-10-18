@@ -51,7 +51,8 @@ private slots:
     void quotaText()
     {
         QCOMPARE(helpers::quotaText(0, 0), QString());
-        QCOMPARE(helpers::quotaText(1200000000, 5000000000), QString("Used 1.2 GB of 5.0 GB"));
+        // binary units, like OneDrive: 1 TiB is "1 TB"
+        QCOMPARE(helpers::quotaText(205700000000ULL, 1099511627776ULL), QString("Used 191.6 GB of 1.0 TB"));
     }
 
     void instanceLabel()
