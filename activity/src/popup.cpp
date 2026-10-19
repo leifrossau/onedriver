@@ -107,6 +107,10 @@ void Popup::configureLayerShell(QScreen *screen, int left, bool bottom, bool anc
     }
     LayerShellQt::Window::Anchors anchors(bottom ? LayerShellQt::Window::AnchorBottom : LayerShellQt::Window::AnchorTop);
     anchors |= anchored ? LayerShellQt::Window::AnchorLeft : LayerShellQt::Window::AnchorRight;
+#ifdef HAVE_LAYERSHELLQT_SCREEN
+    // QWindow::screen() alone is not enough: the compositor picks the output
+    lw->setScreen(screen);
+#endif
     lw->setScope(QStringLiteral("onedriver-activity"));
     lw->setLayer(LayerShellQt::Window::LayerTop);
     lw->setAnchors(anchors);
