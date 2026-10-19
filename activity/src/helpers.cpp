@@ -55,12 +55,19 @@ QString progressText(quint64 done, quint64 total)
     return QStringLiteral("%1 of %2").arg(sizeText(done), sizeText(total));
 }
 
+// OneDrive counts (and its website shows) the quota in units of 1024, so
+// "1 TB" is 1 TiB. Use the same units, or 191.6 GB used shows up as 205.7 GB.
+static QString quotaSizeText(quint64 bytes)
+{
+    return QLocale().formattedDataSize(qint64(bytes), 1, QLocale::DataSizeTraditionalFormat);
+}
+
 QString quotaText(quint64 used, quint64 total)
 {
     if (total == 0) {
         return QString();
     }
-    return QStringLiteral("Used %1 of %2").arg(sizeText(used), sizeText(total));
+    return QStringLiteral("Used %1 of %2").arg(quotaSizeText(used), quotaSizeText(total));
 }
 
 QString instanceLabel(const QString &account, const QString &mountPoint)

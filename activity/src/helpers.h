@@ -23,7 +23,7 @@ QString sizeText(quint64 bytes);
 // "1.2 MB of 4.5 MB", or just "1.2 MB" if the total is unknown.
 QString progressText(quint64 done, quint64 total);
 
-// "Used 1.2 GB of 5 GB", empty if the quota is unknown.
+// "Used 191.6 GB of 1.0 TB", empty if the quota is unknown.
 QString quotaText(quint64 used, quint64 total);
 
 // Name shown in the account selector, e.g. "me@example.com (OneDrive)".
