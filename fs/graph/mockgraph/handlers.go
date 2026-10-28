@@ -479,7 +479,9 @@ func (s *Server) delta(w http.ResponseWriter, r *http.Request, t target) {
 
 	var changed []*node
 	for _, n := range s.nodes {
-		if n.seq > since && n.seq <= upto {
+		// like the real service, a full enumeration (no token) only reports
+		// what exists
+		if n.seq > since && n.seq <= upto && !(since == 0 && n.deleted) {
 			changed = append(changed, n)
 		}
 	}
