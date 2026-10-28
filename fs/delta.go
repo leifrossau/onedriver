@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -56,6 +57,15 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 			http.DefaultClient.CloseIdleConnections()
 		}
 
+		// A requested resync starts over with the complete enumeration. The
+		// request stays pending until a poll that began at the start
+		// succeeded, a failure halfway must not leave a half-done resync.
+		fullEnum := f.resyncRequested()
+		if fullEnum {
+			log.Info().Msg("Resync requested, fetching a full delta.")
+			f.deltaLink = fullDeltaLink
+		}
+
 		// get deltas
 		log.Trace().Msg("Fetching deltas from server.")
 		pollSuccess := false
@@ -78,6 +88,7 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 				log.Warn().Err(err).
 					Msg("Delta token expired, resyncing from a full delta.")
 				f.deltaLink = fullDeltaLink
+				fullEnum = false // not a user resync, do not remove anything
 				continue
 			}
 			if err != nil {
@@ -104,17 +115,11 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 		}
 
 		// now apply deltas
-		secondPass := make([]string, 0)
-		for _, delta := range deltas {
-			err := f.applyDelta(delta)
-			// retry deletion of non-empty directories after all other deltas applied
-			if err != nil && err.Error() == "directory is non-empty" {
-				secondPass = append(secondPass, delta.ID)
-			}
-		}
-		for _, id := range secondPass {
-			// failures should explicitly be ignored the second time around as per docs
-			f.applyDelta(deltas[id])
+		f.applyDeltas(deltas)
+
+		if fullEnum && pollSuccess && !f.IsOffline() {
+			f.removeStale(deltas)
+			f.finishResync()
 		}
 
 		if !f.IsOffline() {
@@ -157,6 +162,126 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 				return
 			}
 		}
+	}
+}
+
+// errParentMissing is returned by applyDelta for items whose parent folder is
+// not in the cache (yet).
+var errParentMissing = errors.New("parent not in cache")
+
+// errDirNotEmpty is returned for a delta deleting a folder that still has
+// children.
+var errDirNotEmpty = errors.New("directory is non-empty")
+
+// applyDeltas applies the deltas of one polling cycle. The Graph API does not
+// promise that a folder is listed before the items inside it (neither within a
+// page nor across pages), so the order is not trusted: items whose parent
+// folder is not in the cache are retried after the rest has been applied (the
+// parent may be one of the deltas), until a pass makes no more progress. The
+// same goes for deletions of folders that are not empty yet. Items whose
+// parent is genuinely unknown (a folder that was never loaded) stay skipped,
+// those get fetched from the server when the folder is first listed.
+func (f *Filesystem) applyDeltas(deltas map[string]*graph.DriveItem) {
+	// deterministic order: the folders first, then by ID, which makes most
+	// items succeed in the first pass
+	items := make([]*graph.DriveItem, 0, len(deltas))
+	for _, d := range deltas {
+		items = append(items, d)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		di, dj := items[i].IsDir() && items[i].Deleted == nil, items[j].IsDir() && items[j].Deleted == nil
+		if di != dj {
+			return di
+		}
+		return items[i].ID < items[j].ID
+	})
+
+	pending := items
+	firstPass := true
+	retried := 0
+	for len(pending) > 0 {
+		var again []*graph.DriveItem
+		for _, d := range pending {
+			err := f.applyDelta(d)
+			if errors.Is(err, errParentMissing) || errors.Is(err, errDirNotEmpty) {
+				again = append(again, d)
+			}
+		}
+		if firstPass {
+			retried = len(again)
+			firstPass = false
+		}
+		if len(again) == len(pending) {
+			// no progress, the rest is skipped for good
+			log.Debug().Int("items", len(again)).
+				Msg("Deltas left over after the last pass (parents not loaded).")
+			break
+		}
+		pending = again
+	}
+	if retried > 0 {
+		log.Debug().Int("items", retried).Int("total", len(items)).
+			Msg("Deltas that needed a second pass (listed before their parent).")
+	}
+}
+
+// Resync discards the delta link, so that the next poll (triggered right away)
+// enumerates the whole drive and reports every item's current state. Items
+// that were missed earlier are created, and (in loaded folders) items that no
+// longer exist on the server are removed.
+func (f *Filesystem) Resync() {
+	f.ctl.resync.Store(true)
+	f.SyncNow()
+}
+
+func (f *Filesystem) resyncRequested() bool { return f.ctl.resync.Load() }
+func (f *Filesystem) finishResync()         { f.ctl.resync.Store(false) }
+
+// removeStale removes items that a complete enumeration of the drive did not
+// report, after the server confirmed that they are gone. Only server-side
+// items without any local changes or pending upload are touched.
+func (f *Filesystem) removeStale(reported map[string]*graph.DriveItem) {
+	var candidates []*Inode
+	f.metadata.Range(func(key, value interface{}) bool {
+		inode := value.(*Inode)
+		id := key.(string)
+		if _, ok := reported[id]; ok || isLocalID(id) || id == "" {
+			return true
+		}
+		if inode.ParentID() == "" { // root
+			return true
+		}
+		candidates = append(candidates, inode)
+		return true
+	})
+
+	// children before their folders
+	sort.Slice(candidates, func(i, j int) bool {
+		return strings.Count(candidates[i].Path(), "/") > strings.Count(candidates[j].Path(), "/")
+	})
+	for _, inode := range candidates {
+		id := inode.ID()
+		path := inode.Path()
+		inode.RLock()
+		busy := inode.hasChanges || len(inode.children) > 0
+		inode.RUnlock()
+		if busy || f.uploads.IsUploadPending(id) || f.content.IsOpen(id) {
+			continue
+		}
+		if f.GetID(id) != inode { // changed meanwhile
+			continue
+		}
+		// Ask the server, the enumeration could have been taken before an
+		// item of ours finished uploading.
+		_, err := graph.GetItem(id, f.auth)
+		if err == nil || !strings.HasPrefix(err.Error(), "HTTP 404 - ") {
+			continue
+		}
+		log.Info().Str("id", id).Str("path", path).
+			Msg("Removing local item that no longer exists on the server (resync).")
+		f.recordActivity(path, status.ActionDeleted)
+		f.changes.notePath(relPath(path))
+		f.DeleteID(id)
 	}
 }
 
@@ -259,11 +384,12 @@ func (f *Filesystem) applyDeltaItem(delta *graph.DriveItem) error {
 	parent := f.GetID(parentID)
 	if parent == nil {
 		// Nothing needs to be applied, item not in cache, so latest copy will
-		// be pulled down next time it's accessed.
+		// be pulled down next time it's accessed. (Unless the parent is
+		// another delta of this cycle, see applyDeltas.)
 		ctx.Trace().
 			Str("delta", "skip").
 			Msg("Skipping delta, item's parent not in cache.")
-		return nil
+		return errParentMissing
 	}
 
 	local := f.GetID(id)
@@ -275,7 +401,7 @@ func (f *Filesystem) applyDeltaItem(delta *graph.DriveItem) error {
 			// after syncing all the changes.
 			ctx.Warn().Str("delta", "delete").
 				Msg("Refusing delta deletion of non-empty folder as per API docs.")
-			return errors.New("directory is non-empty")
+			return errDirNotEmpty
 		}
 		ctx.Info().Str("delta", "delete").
 			Msg("Applying server-side deletion of item.")
@@ -311,7 +437,7 @@ func (f *Filesystem) applyDeltaItem(delta *graph.DriveItem) error {
 	}
 	if local == nil {
 		// check if we don't have it here first
-		local, _ = f.GetChild(parentID, name, nil)
+		local = f.cachedChild(parentID, name)
 		if local != nil {
 			localID := local.ID()
 			ctx.Info().

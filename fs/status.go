@@ -34,6 +34,8 @@ type syncControl struct {
 	paused atomic.Bool
 	// loginRunning is set while the login window is open
 	loginRunning atomic.Bool
+	// resync is set by Resync until the full enumeration has been applied
+	resync atomic.Bool
 	// wake interrupts the delta loop's sleep (Resume, SyncNow)
 	wake chan struct{}
 	// removes the auth failure subscription, set once by NewFilesystem
