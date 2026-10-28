@@ -23,7 +23,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"fmt"
+	"github.com/jstaf/onedriver/fs/dbus"
 	"hash/crc32"
 	"image"
 	"image/color"
@@ -281,20 +281,7 @@ func (t *thumbnailer) markFailed(job thumbJob) {
 // unreserved characters and the sub-delimiters, ":", "@" and "/" is
 // percent-encoded (non-ASCII as UTF-8 bytes).
 func thumbnailURI(mountpoint, p string) string {
-	full := path.Join(filepath.ToSlash(mountpoint), p)
-	var b strings.Builder
-	b.WriteString("file://")
-	for i := 0; i < len(full); i++ {
-		c := full[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
-			strings.IndexByte("-._~!$&'()*+,;=:@/", c) >= 0:
-			b.WriteByte(c)
-		default:
-			fmt.Fprintf(&b, "%%%02X", c)
-		}
-	}
-	return b.String()
+	return dbus.FileURL(mountpoint, p)
 }
 
 // thumbnailName is the file name of a URI's thumbnail: the lowercase hex md5

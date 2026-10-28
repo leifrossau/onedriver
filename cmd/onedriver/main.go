@@ -164,11 +164,15 @@ func main() {
 		Str("mountpoint", absMountPath).
 		Msg("Serving filesystem.")
 	var svc *onedriverdbus.Service
+	var dbusOpts []onedriverdbus.Option
+	if !config.KDENotifyEnabled() {
+		dbusOpts = append(dbusOpts, onedriverdbus.WithoutKDirNotify())
+	}
 	if conn, err := onedriverdbus.Connect(); err != nil {
 		log.Warn().Err(err).Msg("Session D-Bus unavailable, not exporting the status interface.")
 	} else {
 		defer conn.Close()
-		if svc, err = onedriverdbus.Start(conn, absMountPath, filesystem); err != nil {
+		if svc, err = onedriverdbus.Start(conn, absMountPath, filesystem, dbusOpts...); err != nil {
 			svc = nil
 			log.Warn().Err(err).Msg("Could not export the D-Bus status interface.")
 		} else {

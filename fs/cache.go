@@ -32,6 +32,7 @@ type Filesystem struct {
 	ctl       *syncControl      // pause, activity and error reporting, see status.go
 	transfers *transferRegistry // running and queued transfers, see transfers.go
 	changes   changeSet         // items whose state changed, see changes.go
+	remote    remoteSet         // server-side changes, see remote_changes.go
 
 	sync.RWMutex
 	offline    bool

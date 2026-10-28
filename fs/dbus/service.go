@@ -69,6 +69,7 @@ type Service struct {
 	mountpoint string
 	backend    Backend
 	name       string
+	remote     RemoteBackend // nil: no KDirNotify signals
 
 	cancelSub func()
 	notifyCh  chan status.Notification
@@ -84,7 +85,7 @@ func Connect() (*dbus.Conn, error) {
 
 // Start exports the interface for mountpoint (an absolute path) on conn and
 // claims the bus name. Call Close to unexport.
-func Start(conn *dbus.Conn, mountpoint string, backend Backend) (*Service, error) {
+func Start(conn *dbus.Conn, mountpoint string, backend Backend, opts ...Option) (*Service, error) {
 	s := &Service{
 		conn:       conn,
 		mountpoint: filepath.Clean(mountpoint),
@@ -92,6 +93,12 @@ func Start(conn *dbus.Conn, mountpoint string, backend Backend) (*Service, error
 		name:       BusName(mountpoint),
 		notifyCh:   make(chan status.Notification, 64),
 		stop:       make(chan struct{}),
+	}
+	if rb, ok := backend.(RemoteBackend); ok {
+		s.remote = rb
+	}
+	for _, o := range opts {
+		o(s)
 	}
 	if err := conn.Export(&methods{s}, ObjectPath, Interface); err != nil {
 		return nil, err
@@ -149,6 +156,12 @@ func (s *Service) loop() {
 	defer transfersTicker.Stop()
 	statesTicker := time.NewTicker(statesInterval)
 	defer statesTicker.Stop()
+	var kdirC <-chan time.Time
+	if s.remote != nil {
+		kdirTicker := time.NewTicker(kdirInterval)
+		defer kdirTicker.Stop()
+		kdirC = kdirTicker.C
+	}
 	last := s.properties()
 	var checkEvents <-chan struct{}
 	if cn, ok := s.backend.(interface{ CheckingEvents() <-chan struct{} }); ok {
@@ -184,6 +197,8 @@ func (s *Service) loop() {
 					log.Debug().Err(err).Msg("Could not emit D-Bus TransfersChanged signal.")
 				}
 			}
+		case <-kdirC:
+			s.flushKDirNotify()
 		case <-statesTicker.C:
 			paths := s.backend.TakeChangedPaths()
 			if len(paths) == 0 {
