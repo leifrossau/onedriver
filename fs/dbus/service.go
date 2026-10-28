@@ -24,6 +24,9 @@ type Backend interface {
 	Pause()
 	Resume()
 	SyncNow()
+	// Resync starts over with a full enumeration of the drive, see
+	// docs/dbus-interface.md
+	Resync()
 	// Login opens the login window (asynchronously), see docs/dbus-interface.md
 	Login() error
 	Recent(limit int) []status.Activity
@@ -303,6 +306,11 @@ func (m *methods) SyncNow() *dbus.Error {
 	return nil
 }
 
+func (m *methods) Resync() *dbus.Error {
+	m.s.backend.Resync()
+	return nil
+}
+
 func (m *methods) Login() *dbus.Error {
 	return m.s.fail(m.s.backend.Login())
 }
@@ -431,6 +439,7 @@ func introspectionNode() *introspect.Node {
 					method("Pause"),
 					method("Resume"),
 					method("SyncNow"),
+					method("Resync"),
 					method("Login"),
 					method("GetRecent", arg("limit", "u", "in"), arg("items", "a(sxs)", "out")),
 					method("GetFileState", arg("path", "s", "in"), arg("state", "s", "out"), arg("pinned", "b", "out")),
