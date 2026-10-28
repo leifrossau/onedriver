@@ -37,6 +37,7 @@ type menuEvent struct {
 type dbusMenu struct {
 	conn     *dbus.Conn
 	onAction func(Action)
+	onShow   func() bool
 
 	mu    sync.Mutex
 	rev   uint32
@@ -44,8 +45,8 @@ type dbusMenu struct {
 	idx   map[int32]*MenuItem
 }
 
-func newDBusMenu(conn *dbus.Conn, onAction func(Action)) (*dbusMenu, error) {
-	m := &dbusMenu{conn: conn, onAction: onAction, idx: map[int32]*MenuItem{}}
+func newDBusMenu(conn *dbus.Conn, onAction func(Action), onShow func() bool) (*dbusMenu, error) {
+	m := &dbusMenu{conn: conn, onAction: onAction, onShow: onShow, idx: map[int32]*MenuItem{}}
 	if err := conn.Export(m, menuPath, menuIface); err != nil {
 		return nil, err
 	}
@@ -192,7 +193,14 @@ func (m *dbusMenu) EventGroup(events []menuEvent) ([]int32, *dbus.Error) {
 	return bad, nil
 }
 
-func (m *dbusMenu) AboutToShow(id int32) (bool, *dbus.Error) { return false, nil }
+// AboutToShow refreshes the menu (the "checked 3 min ago" text ages). The
+// change is announced with LayoutUpdated, so no extra update is requested.
+func (m *dbusMenu) AboutToShow(id int32) (bool, *dbus.Error) {
+	if m.onShow != nil {
+		m.onShow()
+	}
+	return false, nil
+}
 
 func (m *dbusMenu) AboutToShowGroup(ids []int32) ([]int32, []int32, *dbus.Error) {
 	return []int32{}, []int32{}, nil

@@ -39,6 +39,7 @@ type Instance struct {
 	QuotaUsed        uint64
 	QuotaTotal       uint64
 	LastSync         int64
+	Checking         bool // a user requested check is running (daemon v1.5+)
 	LastError        string
 	AuthExpired      bool
 	Recent           []RecentItem
@@ -48,6 +49,9 @@ func (i Instance) paused() bool { return i.Paused || i.State == StatePaused }
 
 // state returns the instance state, treating unknown values as idle.
 func (i Instance) state() string {
+	if i.Checking && (i.State == StateIdle || i.State == "") {
+		return StateSyncing
+	}
 	switch i.State {
 	case StateIdle, StatePaused, StateSyncing, StateOffline, StateError:
 		return i.State
@@ -108,8 +112,25 @@ func PendingText(up, down uint32) string {
 	return plural(up, "upload") + ", " + plural(down, "download")
 }
 
+// AgoText is how long ago a unix time was: "just now", "3 min ago", ...
+func AgoText(ts int64, now time.Time) string {
+	d := now.Sub(time.Unix(ts, 0))
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%d min ago", int(d/time.Minute))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%d h ago", int(d/time.Hour))
+	}
+	return fmt.Sprintf("%d d ago", int(d/(24*time.Hour)))
+}
+
 // StatusLine is the one-line status of an instance.
-func StatusLine(i Instance) string {
+func StatusLine(i Instance) string { return StatusLineAt(i, time.Now()) }
+
+// StatusLineAt is StatusLine for a given current time.
+func StatusLineAt(i Instance, now time.Time) string {
 	if i.AuthExpired {
 		return "Login expired"
 	}
@@ -124,7 +145,13 @@ func StatusLine(i Instance) string {
 	case StatePaused:
 		return "Paused"
 	case StateSyncing:
+		if i.Checking && i.PendingUploads == 0 && i.PendingDownloads == 0 {
+			return "Checking for changes…"
+		}
 		return "Syncing: " + PendingText(i.PendingUploads, i.PendingDownloads)
+	}
+	if i.LastSync > 0 {
+		return "Up to date · checked " + AgoText(i.LastSync, now)
 	}
 	return "Up to date"
 }
@@ -241,12 +268,12 @@ func recentLabel(r RecentItem) string {
 	return fmt.Sprintf("%s (%s)", r.Path, r.Action)
 }
 
-func instanceItems(i Instance) []*MenuItem {
+func instanceItems(i Instance, now time.Time) []*MenuItem {
 	h := i.MountPoint
 	if i.Account != "" {
 		h += " - " + i.Account
 	}
-	m := []*MenuItem{info(h), info(StatusLine(i))}
+	m := []*MenuItem{info(h), info(StatusLineAt(i, now))}
 	open := item("Open folder", &Action{Kind: ActOpenFolder, Instance: i.BusName, Arg: i.MountPoint})
 	open.Icon = "folder-open"
 	m = append(m, open)
@@ -290,7 +317,10 @@ func activityItem() *MenuItem {
 
 // BuildMenu builds the tray menu: one flat section for a single instance, one
 // submenu per instance for several, plus the global entries.
-func BuildMenu(insts []Instance) []*MenuItem {
+func BuildMenu(insts []Instance) []*MenuItem { return BuildMenuAt(insts, time.Now()) }
+
+// BuildMenuAt is BuildMenu for a given current time.
+func BuildMenuAt(insts []Instance, now time.Time) []*MenuItem {
 	var m []*MenuItem
 	insts = sorted(insts)
 	switch len(insts) {
@@ -299,13 +329,13 @@ func BuildMenu(insts []Instance) []*MenuItem {
 			item("Open onedriver settings", &Action{Kind: ActSettings}))
 	case 1:
 		m = append(m, activityItem())
-		m = append(m, instanceItems(insts[0])...)
+		m = append(m, instanceItems(insts[0], now)...)
 	default:
 		m = append(m, activityItem())
 		for _, i := range insts {
 			m = append(m, &MenuItem{
-				Label:    fmt.Sprintf("%s - %s", i.MountPoint, StatusLine(i)),
-				Children: instanceItems(i),
+				Label:    fmt.Sprintf("%s - %s", i.MountPoint, StatusLineAt(i, now)),
+				Children: instanceItems(i, now),
 			})
 		}
 	}
