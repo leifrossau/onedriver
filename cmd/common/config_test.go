@@ -86,3 +86,9 @@ func TestServerThumbnailsDefault(t *testing.T) {
 	off := false
 	assert.False(t, (&Config{ServerThumbnails: &off}).ServerThumbnailsEnabled())
 }
+
+func TestKDENotifyDefault(t *testing.T) {
+	assert.True(t, (&Config{}).KDENotifyEnabled())
+	off := false
+	assert.False(t, (&Config{KDENotify: &off}).KDENotifyEnabled())
+}

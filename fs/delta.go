@@ -287,6 +287,7 @@ func (f *Filesystem) removeStale(reported map[string]*graph.DriveItem) {
 			Msg("Removing local item that no longer exists on the server (resync).")
 		f.recordActivity(path, status.ActionDeleted)
 		f.changes.notePath(relPath(path))
+		f.remoteChange(status.RemoteRemoved, relPath(path), "")
 		f.DeleteID(id)
 	}
 }
@@ -414,6 +415,7 @@ func (f *Filesystem) applyDeltaItem(delta *graph.DriveItem) error {
 		if local != nil {
 			f.recordActivity(local.Path(), status.ActionDeleted)
 			f.changes.notePath(relPath(local.Path()))
+			f.remoteChange(status.RemoteRemoved, relPath(local.Path()), "")
 		}
 		f.DeleteID(id)
 		return nil
@@ -473,6 +475,7 @@ func (f *Filesystem) applyDeltaItem(delta *graph.DriveItem) error {
 			f.InsertChild(parentID, created)
 			f.recordActivity(created.Path(), status.ActionAdded)
 			f.stateChanged(id)
+			f.remoteAddedIn(parent)
 			return nil
 		}
 	}
@@ -490,7 +493,10 @@ func (f *Filesystem) applyDeltaItem(delta *graph.DriveItem) error {
 			Msg("Applying server-side rename")
 		oldParentID := local.ParentID()
 		// local rename only
-		f.MovePath(oldParentID, parentID, localName, name, f.auth)
+		oldPath := local.Path()
+		if f.MovePath(oldParentID, parentID, localName, name, f.auth) == nil {
+			f.remoteChange(status.RemoteRenamed, relPath(oldPath), relPath(local.Path()))
+		}
 		// do not return, there may be additional changes
 	}
 
@@ -549,6 +555,7 @@ func (f *Filesystem) applyDeltaItem(delta *graph.DriveItem) error {
 
 	switch action {
 	case conflict.Overwrite:
+		f.remoteChange(status.RemoteChanged, relPath(local.Path()), "")
 		return nil
 	case conflict.Skip:
 		if remoteHash != "" && strings.EqualFold(remoteHash, localHash) {
@@ -692,6 +699,7 @@ func (f *Filesystem) createConflictCopy(delta *graph.DriveItem, ctx zerolog.Logg
 		Str("conflictID", item.ID).
 		Msg("Saved server version as conflict copy, uploading it.")
 	f.noteConflict(copyInode.Path())
+	f.remoteAddedIn(f.GetID(parentID))
 	f.stateChanged(item.ID)
 	return f.uploads.QueueUpload(copyInode)
 }

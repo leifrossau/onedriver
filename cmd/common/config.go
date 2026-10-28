@@ -30,6 +30,11 @@ type Config struct {
 	// do not download every image and document to show a preview. Enabled by
 	// default; use "serverThumbnails: false" to turn it off.
 	ServerThumbnails *bool `yaml:"serverThumbnails,omitempty"`
+	// KDENotify makes the daemon announce changes that arrive from OneDrive
+	// (new, removed, renamed and overwritten files) with KDE's KDirNotify
+	// D-Bus signals, so Dolphin shows them without a manual refresh. Enabled
+	// by default; use "kdeNotify: false" to turn it off.
+	KDENotify        *bool `yaml:"kdeNotify,omitempty"`
 	graph.AuthConfig `yaml:"auth"`
 }
 
@@ -122,6 +127,11 @@ func (c Config) WriteConfig(path string) error {
 		log.Error().Err(err).Msg("Could not write config to disk.")
 	}
 	return err
+}
+
+// KDENotifyEnabled returns the kdeNotify setting (default true).
+func (c *Config) KDENotifyEnabled() bool {
+	return c.KDENotify == nil || *c.KDENotify
 }
 
 // ServerThumbnailsEnabled returns the serverThumbnails setting (default true).

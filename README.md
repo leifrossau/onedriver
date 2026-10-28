@@ -184,7 +184,14 @@ cacheDir: ~/.cache/onedriver
 cacheLimit: 10G      # evict least recently used unpinned content above this size (default: off)
 evictAfterDays: 30   # evict unpinned content not opened for this long (default: off)
 serverThumbnails: true  # fill the thumbnail cache with OneDrive's thumbnails (default: on)
+kdeNotify: true         # announce remote changes to Dolphin/KDE via KDirNotify D-Bus signals (default: on)
 ```
+
+`kdeNotify` makes the daemon emit KDE's `org.kde.KDirNotify` D-Bus signals on
+the session bus for changes that arrive from OneDrive (new, removed, renamed
+and overwritten files in folders that were listed), because FUSE gives file
+managers no inotify events for those. Without it Dolphin only shows them after
+a manual refresh (F5). Changes made through the mount are not announced.
 
 Only content that is not pinned, not open, and has no local changes waiting for
 upload is ever evicted.

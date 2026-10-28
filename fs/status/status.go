@@ -111,3 +111,19 @@ type Transfer struct {
 	BytesTotal uint64
 	QueuedAt   int64 // unix time
 }
+
+// Kinds of RemoteChange.
+const (
+	RemoteAdded   = "added"   // Path is the folder that got new entries
+	RemoteRemoved = "removed" // Path is the removed item
+	RemoteRenamed = "renamed" // Path is the old, NewPath the new location
+	RemoteChanged = "changed" // Path is the item whose content/metadata changed
+)
+
+// RemoteChange is a change that came from the server (not from the mount),
+// with paths relative to the mountpoint.
+type RemoteChange struct {
+	Kind    string
+	Path    string
+	NewPath string
+}
