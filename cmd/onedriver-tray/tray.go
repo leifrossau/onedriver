@@ -79,7 +79,7 @@ func NewTray(conn *dbus.Conn, opts Options) (*Tray, error) {
 		quit:   make(chan struct{}),
 	}
 	var err error
-	if t.menu, err = newDBusMenu(conn, t.Do); err != nil {
+	if t.menu, err = newDBusMenu(conn, t.Do, t.rebuild); err != nil {
 		return nil, err
 	}
 	if t.sni, err = newSNI(conn, t.activate); err != nil {
@@ -145,10 +145,15 @@ func (t *Tray) Run() error {
 		}
 	}
 
+	// the "checked 3 min ago" texts age without any signal
+	refresh := time.NewTicker(30 * time.Second)
+	defer refresh.Stop()
 	for {
 		select {
 		case <-t.quit:
 			return nil
+		case <-refresh.C:
+			t.rebuild()
 		case sig, ok := <-t.sigs:
 			if !ok || sig == nil {
 				// godbus closes the channel when the bus connection goes away
@@ -272,12 +277,14 @@ func parseStatus(name string, st map[string]dbus.Variant) Instance {
 	b := func(k string) bool { v, _ := st[k].Value().(bool); return v }
 	var ls int64
 	ls, _ = st["LastSync"].Value().(int64)
+	// missing on daemons older than interface v1.5: false
+	checking := b("Checking")
 	return Instance{
 		BusName: name, MountPoint: str("MountPoint"), Account: str("Account"),
 		State: str("State"), Paused: b("Paused"),
 		PendingUploads: u32("PendingUploads"), PendingDownloads: u32("PendingDownloads"),
 		QuotaUsed: u64("QuotaUsed"), QuotaTotal: u64("QuotaTotal"),
-		LastSync: ls, LastError: str("LastError"), AuthExpired: b("AuthExpired"),
+		LastSync: ls, Checking: checking, LastError: str("LastError"), AuthExpired: b("AuthExpired"),
 	}
 }
 
@@ -297,12 +304,13 @@ func menuSignature(items []*MenuItem) string {
 }
 
 // rebuild recomputes icon, tooltip and menu from the current instances.
-func (t *Tray) rebuild() {
+func (t *Tray) rebuild() bool {
 	insts := t.Instances()
 	state := AggregateState(insts)
-	title, desc := Tooltip(insts, time.Now())
+	now := time.Now()
+	title, desc := Tooltip(insts, now)
 	t.sni.Update(state, title, desc)
-	items := BuildMenu(insts)
+	items := BuildMenuAt(insts, now)
 	sig := menuSignature(items)
 	t.mu.Lock()
 	changed := sig != t.menuSig
@@ -311,6 +319,7 @@ func (t *Tray) rebuild() {
 	if changed {
 		t.menu.SetItems(items)
 	}
+	return changed
 }
 
 // activate is the left click: toggle the activity window, starting

@@ -1,4 +1,4 @@
-# onedriver D-Bus interface (v1.4)
+# onedriver D-Bus interface (v1.5)
 
 Every running `onedriver` instance (one per mountpoint) exports a status and
 control interface on the **session bus**. It is used by `onedriver-tray` and
@@ -52,6 +52,18 @@ without the interface.
 Additional property (v1.2): `AuthExpired` (`b`), true while the daemon has no
 valid login. The daemon keeps running (cached files stay readable, changes are
 kept locally) and resumes syncing after `Login` succeeds.
+
+Additional property (v1.5): `Checking` (`b`), true from the moment `SyncNow` or
+`Resync` is called until the poll cycle it triggered has finished, whether it
+succeeded or failed. Regular background polls never set it. It stays true for
+at least about a second so that a check that finds nothing is still visible,
+and `PropertiesChanged` is emitted right away when it flips. It is cleared
+early by `Pause`, and when the daemon cannot poll (login expired); after
+`SyncNow` it also times out after 2 minutes, after `Resync` it stays true for
+the whole enumeration. While `Checking` is true and nothing with higher
+precedence applies (`error`, `paused`, `offline`), `State` is `syncing`.
+`LastSync` is updated when the triggered poll succeeded. Clients must cope
+with the property missing on older daemons.
 
 `PropertiesChanged` is emitted when any of these change, rate-limited to at
 most once per second (coalesced).

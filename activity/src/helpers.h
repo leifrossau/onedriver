@@ -17,6 +17,10 @@ PathParts splitPath(const QString &path);
 // "just now", "5 min ago", "3 hours ago", "yesterday", "4 days ago", or a date.
 QString relativeTime(qint64 unixTime, qint64 now);
 
+// "Checked just now", "Checked 3 min ago", ...; empty if there was no sync yet
+// (lastSync <= 0).
+QString checkedText(qint64 lastSync, qint64 now);
+
 // Decimal units (kB, MB, GB) like Dolphin and OneDrive show them.
 QString sizeText(quint64 bytes);
 

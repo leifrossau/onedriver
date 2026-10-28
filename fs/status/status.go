@@ -46,6 +46,8 @@ type Status struct {
 	LastError        string
 	// AuthExpired is true while there is no valid login, only Login fixes it
 	AuthExpired bool
+	// Checking is true while a user requested check for changes is running
+	Checking bool
 	// HasError is true while an upload was dropped or authentication failed
 	HasError bool
 }
@@ -53,7 +55,11 @@ type Status struct {
 // State derives the overall state. Precedence: error > paused > offline >
 // syncing > idle.
 func (s Status) State() string {
-	return DeriveState(s.HasError, s.Paused, s.Offline, s.PendingUploads, s.PendingDownloads)
+	st := DeriveState(s.HasError, s.Paused, s.Offline, s.PendingUploads, s.PendingDownloads)
+	if st == StateIdle && s.Checking {
+		return StateSyncing
+	}
+	return st
 }
 
 // DeriveState computes the overall state, see Status.State.

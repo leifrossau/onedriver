@@ -41,6 +41,16 @@ type syncControl struct {
 	// removes the auth failure subscription, set once by NewFilesystem
 	cancelAuthHook func()
 
+	// checking tracks a user requested check (SyncNow, Resync), see
+	// beginCheck. A zero checkGen means there never was one.
+	checkMu      sync.Mutex
+	checkGen     uint64    // incremented by every request
+	checkDoneGen uint64    // requests up to this one have been served
+	checkSince   time.Time // when the newest request was made
+	checkDoneAt  time.Time // when the serving cycle ended
+	checkFull    bool      // a Resync is among the pending requests
+	checkEvents  chan struct{}
+
 	mu            sync.Mutex
 	lastSync      time.Time
 	lastError     string
@@ -63,6 +73,7 @@ type syncControl struct {
 func newSyncControl() *syncControl {
 	return &syncControl{
 		wake:          make(chan struct{}, 1),
+		checkEvents:   make(chan struct{}, 1),
 		failedUploads: make(map[string]string),
 		observers:     make(map[int]func(status.Notification)),
 	}
@@ -206,7 +217,7 @@ func (f *Filesystem) Login() error {
 			return
 		}
 		f.clearAuthFailure()
-		f.SyncNow()
+		f.wakeLoop()
 		if f.pins != nil {
 			f.pins.signal()
 		}
@@ -231,23 +242,124 @@ func (f *Filesystem) Paused() bool {
 // Local writes keep working and are uploaded after Resume.
 func (f *Filesystem) Pause() {
 	f.ctl.paused.Store(true)
+	f.cancelCheck()
 }
 
 // Resume undoes Pause and triggers a delta poll right away.
 func (f *Filesystem) Resume() {
 	f.ctl.paused.Store(false)
-	f.SyncNow()
+	f.wakeLoop()
 	if f.pins != nil {
 		f.pins.signal()
 	}
 }
 
-// SyncNow makes the delta loop poll the server right away.
+// SyncNow makes the delta loop poll the server right away. Checking is true
+// until that poll has finished.
 func (f *Filesystem) SyncNow() {
+	f.beginCheck(false)
+	f.wakeLoop()
+}
+
+// wakeLoop interrupts the sleep of the delta loop without announcing a user
+// requested check.
+func (f *Filesystem) wakeLoop() {
 	select {
 	case f.ctl.wake <- struct{}{}:
 	default:
 	}
+}
+
+const (
+	// checkMinVisible is how long Checking stays true at least, so that a
+	// client can show a check that found nothing and took milliseconds.
+	checkMinVisible = 1200 * time.Millisecond
+	// checkTimeout is the longest Checking stays true after SyncNow if the
+	// poll never ends (a hanging request). It does not apply to Resync.
+	checkTimeout = 2 * time.Minute
+)
+
+// CheckingEvents delivers a value whenever Checking may have changed, so that
+// the D-Bus service can emit PropertiesChanged without waiting for its tick.
+func (f *Filesystem) CheckingEvents() <-chan struct{} { return f.ctl.checkEvents }
+
+func (f *Filesystem) checkEvent() {
+	select {
+	case f.ctl.checkEvents <- struct{}{}:
+	default:
+	}
+}
+
+// beginCheck records a user requested poll (full: a Resync).
+func (f *Filesystem) beginCheck(full bool) {
+	c := f.ctl
+	c.checkMu.Lock()
+	c.checkGen++
+	c.checkSince = time.Now()
+	c.checkFull = c.checkFull || full
+	c.checkMu.Unlock()
+	f.checkEvent()
+	if !full {
+		time.AfterFunc(checkTimeout+50*time.Millisecond, f.checkEvent)
+	}
+}
+
+// checkTicket returns the newest check request, to be passed to endCheck when
+// the poll cycle that starts now has ended.
+func (f *Filesystem) checkTicket() uint64 {
+	f.ctl.checkMu.Lock()
+	defer f.ctl.checkMu.Unlock()
+	return f.ctl.checkGen
+}
+
+// endCheck marks the requests up to ticket as served. A request that arrived
+// while the cycle was running is served by the next cycle.
+func (f *Filesystem) endCheck(ticket uint64) {
+	c := f.ctl
+	c.checkMu.Lock()
+	if ticket <= c.checkDoneGen {
+		c.checkMu.Unlock()
+		return
+	}
+	c.checkDoneGen = ticket
+	c.checkDoneAt = time.Now()
+	if ticket == c.checkGen {
+		c.checkFull = false
+	}
+	remaining := checkMinVisible - time.Since(c.checkSince)
+	c.checkMu.Unlock()
+	f.checkEvent()
+	if remaining > 0 {
+		time.AfterFunc(remaining+50*time.Millisecond, f.checkEvent)
+	}
+}
+
+// cancelCheck ends all pending requests right away (Pause).
+func (f *Filesystem) cancelCheck() {
+	c := f.ctl
+	c.checkMu.Lock()
+	c.checkDoneGen = c.checkGen
+	c.checkDoneAt = time.Time{}
+	c.checkFull = false
+	c.checkMu.Unlock()
+	f.checkEvent()
+}
+
+// Checking returns whether a user requested check for changes is running.
+func (f *Filesystem) Checking() bool {
+	c := f.ctl
+	c.checkMu.Lock()
+	defer c.checkMu.Unlock()
+	if c.checkGen == 0 {
+		return false
+	}
+	now := time.Now()
+	if c.checkDoneGen == c.checkGen {
+		// served: only the minimum visible time is left
+		return !c.checkDoneAt.IsZero() && now.Sub(c.checkDoneAt) < checkMinVisible &&
+			now.Sub(c.checkSince) < checkMinVisible
+	}
+	return c.checkFull || now.Sub(c.checkSince) < checkTimeout
 }
 
 // sleepOrWake is sleep(), but returns early (still true) when SyncNow was
@@ -289,6 +401,7 @@ func (f *Filesystem) Status() status.Status {
 	s := status.Status{
 		Paused:           f.Paused(),
 		Offline:          f.IsOffline(),
+		Checking:         f.Checking(),
 		PendingUploads:   f.uploads.pendingCount(),
 		PendingDownloads: uint32(pins.PendingFiles),
 		PinnedFiles:      uint32(pins.PinnedFiles),
