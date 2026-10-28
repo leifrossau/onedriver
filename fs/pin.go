@@ -449,12 +449,10 @@ func serverPath(item *graph.DriveItem) string {
 	if item.Parent == nil {
 		return ""
 	}
-	parent := item.Parent.Path
-	idx := strings.Index(parent, "root:")
-	if idx < 0 {
+	if !strings.Contains(item.Parent.Path, "root:") {
 		return ""
 	}
-	parent = parent[idx+len("root:"):]
+	parent := graph.TrimRootPrefix(item.Parent.Path)
 	return strings.TrimSuffix(parent, "/") + "/" + item.Name
 }
 

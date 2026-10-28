@@ -138,6 +138,7 @@ QVariant RecentModel::data(const QModelIndex &index, int role) const
         if (e.action == QLatin1String("uploaded")) return QStringLiteral("Uploaded");
         if (e.action == QLatin1String("downloaded")) return QStringLiteral("Downloaded");
         if (e.action == QLatin1String("deleted")) return QStringLiteral("Deleted");
+        if (e.action == QLatin1String("added")) return QStringLiteral("Added");
         if (e.action == QLatin1String("conflict")) return QStringLiteral("Conflict");
         if (e.action == QLatin1String("error")) return QStringLiteral("Error");
         return e.action.left(1).toUpper() + e.action.mid(1);
@@ -145,8 +146,10 @@ QVariant RecentModel::data(const QModelIndex &index, int role) const
         if (e.action == QLatin1String("uploaded")) return QStringLiteral("cloud-upload");
         if (e.action == QLatin1String("downloaded")) return QStringLiteral("cloud-download");
         if (e.action == QLatin1String("deleted")) return QStringLiteral("edit-delete");
+        if (e.action == QLatin1String("added")) return QStringLiteral("list-add");
         if (e.action == QLatin1String("conflict")) return QStringLiteral("dialog-warning");
-        return QStringLiteral("dialog-error");
+        if (e.action == QLatin1String("error")) return QStringLiteral("dialog-error");
+        return QStringLiteral("dialog-information"); // an action this popup doesn't know, not an error
     case TimeTextRole:
         return helpers::relativeTime(e.time, m_clock());
     case IconNameRole:

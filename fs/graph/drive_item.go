@@ -88,6 +88,16 @@ type DriveItem struct {
 	WebURL           string           `json:"webUrl,omitempty"`
 }
 
+// TrimRootPrefix strips the drive root prefix from a parentReference.path,
+// both the classic "/drive/root:" and the newer "/drives/<drive id>/root:"
+// form, leaving the path relative to the drive root ("" for the root).
+func TrimRootPrefix(path string) string {
+	if idx := strings.Index(path, "root:"); idx >= 0 {
+		return path[idx+len("root:"):]
+	}
+	return path
+}
+
 // IsDir returns if the DriveItem represents a directory or not
 func (d *DriveItem) IsDir() bool {
 	return d.Folder != nil

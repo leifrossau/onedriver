@@ -200,13 +200,14 @@ func (i *Inode) Path() string {
 		return "/"
 	}
 
-	// all paths come prefixed with "/drive/root:"
+	// Paths come prefixed with "/drive/root:", or with the newer
+	// "/drives/<drive id>/root:" that OneDrive now sends for some items.
 	i.RLock()
 	defer i.RUnlock()
 	if i.DriveItem.Parent == nil {
 		return name
 	}
-	prepath := strings.TrimPrefix(i.DriveItem.Parent.Path+"/"+name, "/drive/root:")
+	prepath := graph.TrimRootPrefix(i.DriveItem.Parent.Path) + "/" + name
 	return strings.Replace(prepath, "//", "/", -1)
 }
 

@@ -4,6 +4,7 @@
 package graph
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -140,7 +141,25 @@ func Request(resource string, auth *Auth, method string, content io.Reader, head
 		return nil, fmt.Errorf("HTTP %d - %s: %s",
 			response.StatusCode, gerr.Error.Code, gerr.Error.Message)
 	}
+	if strings.Contains(response.Header.Get("Content-Type"), "json") {
+		body = fixNegativeSizes(body)
+	}
 	return body, nil
+}
+
+// negativeSize matches a negative "size" member in a JSON document. Inside a
+// JSON string the quotes would be escaped (\"size\"), so names can't match.
+var negativeSize = regexp.MustCompile(`"size"(\s*):(\s*)-[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?`)
+
+// fixNegativeSizes replaces negative item sizes with 0. OneDrive occasionally
+// reports one (seen on a personal account: -691887); DriveItem.Size is a
+// uint64, so the whole response - e.g. a delta page - would fail to decode
+// and no later change could be applied until that item changed again.
+func fixNegativeSizes(body []byte) []byte {
+	if !bytes.Contains(body, []byte(`"size"`)) {
+		return body
+	}
+	return negativeSize.ReplaceAll(body, []byte(`"size"${1}:${2}0`))
 }
 
 // Get is a convenience wrapper around Request

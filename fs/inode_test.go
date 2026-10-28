@@ -146,3 +146,22 @@ func TestDoubleCreate(t *testing.T) {
 		"IDs did not match when create run twice on same file.",
 	)
 }
+
+// OneDrive now sends some parentReference paths as "/drives/<id>/root:/..."
+// instead of "/drive/root:/...". Both must give the same mount path.
+func TestInodePathNewDrivesPrefix(t *testing.T) {
+	t.Parallel()
+	for _, parent := range []string{"/drive/root:/Test", "/drives/73B92D8981ACF028/root:/Test"} {
+		inode := NewInodeDriveItem(&graph.DriveItem{
+			ID:     "x",
+			Name:   "lecture.pdf",
+			Parent: &graph.DriveItemParent{ID: "p", Path: parent},
+		})
+		assert.Equal(t, "/Test/lecture.pdf", inode.Path(), parent)
+	}
+	inode := NewInodeDriveItem(&graph.DriveItem{
+		ID: "y", Name: "top.txt",
+		Parent: &graph.DriveItemParent{ID: "root", Path: "/drives/73B92D8981ACF028/root:"},
+	})
+	assert.Equal(t, "/top.txt", inode.Path())
+}

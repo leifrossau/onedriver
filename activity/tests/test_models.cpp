@@ -57,8 +57,8 @@ private slots:
         const qint64 now = 1'800'000'000;
         RecentModel m;
         m.setClock([now] { return now; });
-        m.setEntries({{"Docs/x.pdf", now - 120, "uploaded"}, {"y.txt", now - 5, "conflict"}, {"z", now - 5, "weird"}});
-        QCOMPARE(m.rowCount(), 3);
+        m.setEntries({{"Docs/x.pdf", now - 120, "uploaded"}, {"y.txt", now - 5, "conflict"}, {"z", now - 5, "weird"}, {"New/n.pdf", now - 5, "added"}, {"e", now - 5, "error"}});
+        QCOMPARE(m.rowCount(), 5);
         QCOMPARE(m.data(m.index(0), RecentModel::NameRole).toString(), QString("x.pdf"));
         QCOMPARE(m.data(m.index(0), RecentModel::FolderRole).toString(), QString("Docs"));
         QCOMPARE(m.data(m.index(0), RecentModel::ActionTextRole).toString(), QString("Uploaded"));
@@ -67,6 +67,11 @@ private slots:
         QCOMPARE(m.data(m.index(1), RecentModel::ActionIconRole).toString(), QString("dialog-warning"));
         QCOMPARE(m.data(m.index(1), RecentModel::TimeTextRole).toString(), QString("just now"));
         QCOMPARE(m.data(m.index(2), RecentModel::ActionTextRole).toString(), QString("Weird"));
+        // unknown actions are not errors
+        QCOMPARE(m.data(m.index(2), RecentModel::ActionIconRole).toString(), QString("dialog-information"));
+        QCOMPARE(m.data(m.index(3), RecentModel::ActionTextRole).toString(), QString("Added"));
+        QCOMPARE(m.data(m.index(3), RecentModel::ActionIconRole).toString(), QString("list-add"));
+        QCOMPARE(m.data(m.index(4), RecentModel::ActionIconRole).toString(), QString("dialog-error"));
     }
 };
 
