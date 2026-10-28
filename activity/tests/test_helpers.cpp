@@ -42,6 +42,15 @@ private slots:
         QVERIFY(!helpers::relativeTime(now - 30 * 86400, now).contains("ago"));
     }
 
+    void checkedText()
+    {
+        const qint64 now = QDateTime(QDate(2026, 6, 15), QTime(12, 0)).toSecsSinceEpoch();
+        QCOMPARE(helpers::checkedText(0, now), QString());
+        QCOMPARE(helpers::checkedText(now - 5, now), QString("Checked just now"));
+        QCOMPARE(helpers::checkedText(now - 180, now), QString("Checked 3 min ago"));
+        QCOMPARE(helpers::checkedText(now - 3 * 3600, now), QString("Checked 3 hours ago"));
+    }
+
     void progressText()
     {
         QCOMPARE(helpers::progressText(1200000, 4500000), QString("1.2 MB of 4.5 MB"));

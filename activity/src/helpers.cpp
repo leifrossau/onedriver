@@ -1,6 +1,7 @@
 #include "helpers.h"
 
 #include <QDateTime>
+#include <QObject>
 #include <QLocale>
 
 namespace helpers {
@@ -40,6 +41,14 @@ QString relativeTime(qint64 unixTime, qint64 now)
         return QStringLiteral("%1 days ago").arg(days);
     }
     return QLocale().toString(then.date(), QLocale::ShortFormat);
+}
+
+QString checkedText(qint64 lastSync, qint64 now)
+{
+    if (lastSync <= 0) {
+        return QString();
+    }
+    return QObject::tr("Checked %1").arg(relativeTime(lastSync, now));
 }
 
 QString sizeText(quint64 bytes)

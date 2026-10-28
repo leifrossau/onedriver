@@ -74,6 +74,26 @@ Window {
                             elide: Text.ElideRight
                             color: win.backend.isError ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
                         }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: checkLabel.text !== ""
+                            spacing: Kirigami.Units.smallSpacing
+                            QQC2.BusyIndicator {
+                                visible: win.backend.checking
+                                running: visible
+                                implicitWidth: Kirigami.Units.iconSizes.small
+                                implicitHeight: Kirigami.Units.iconSizes.small
+                                padding: 0
+                            }
+                            QQC2.Label {
+                                id: checkLabel
+                                Layout.fillWidth: true
+                                text: win.backend.checkText
+                                elide: Text.ElideRight
+                                opacity: 0.7
+                                font: Kirigami.Theme.smallFont
+                            }
+                        }
                         QQC2.Label {
                             Layout.fillWidth: true
                             visible: text !== ""
@@ -333,11 +353,24 @@ Window {
                     onClicked: win.backend.togglePause()
                 }
                 QQC2.ToolButton {
+                    id: syncButton
                     Layout.fillWidth: true
-                    text: qsTr("Sync now")
+                    text: win.backend.checking ? qsTr("Checking…") : qsTr("Sync now")
                     icon.name: "view-refresh"
-                    enabled: win.backend.connected
+                    icon.color: win.backend.checking ? "transparent" : Kirigami.Theme.textColor
+                    enabled: win.backend.connected && !win.backend.checking
                     onClicked: win.backend.syncNow()
+
+                    QQC2.BusyIndicator {
+                        // sits where the icon is while the button is working
+                        anchors.verticalCenter: parent.verticalCenter
+                        x: syncButton.leftPadding
+                        width: Kirigami.Units.iconSizes.small
+                        height: width
+                        padding: 0
+                        visible: win.backend.checking
+                        running: visible
+                    }
                 }
                 QQC2.ToolButton {
                     Layout.fillWidth: true

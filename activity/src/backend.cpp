@@ -2,6 +2,7 @@
 
 #include "helpers.h"
 
+#include <QDateTime>
 #include <QDBusConnection>
 #include <QDBusError>
 #include <QDBusMessage>
@@ -50,6 +51,7 @@ Backend::Backend(QObject *parent) : QObject(parent)
     connect(&m_debounce, &QTimer::timeout, this, &Backend::refresh);
     m_tick.setInterval(30 * 1000);
     connect(&m_tick, &QTimer::timeout, &m_recent, &RecentModel::refreshTimes);
+    connect(&m_tick, &QTimer::timeout, this, &Backend::statusChanged); // "Checked 3 min ago" ages
 
     QDBusConnection::sessionBus().connect(QStringLiteral("org.freedesktop.DBus"), QStringLiteral("/org/freedesktop/DBus"),
                                           QStringLiteral("org.freedesktop.DBus"), QStringLiteral("NameOwnerChanged"), this,
@@ -98,6 +100,17 @@ QString Backend::account() const
 bool Backend::isError() const
 {
     return m_status.value(QStringLiteral("State")).toString() == QLatin1String("error");
+}
+
+QString Backend::checkText() const
+{
+    if (!connected()) {
+        return QString();
+    }
+    if (checking()) {
+        return tr("Checking for changes…");
+    }
+    return helpers::checkedText(m_status.value(QStringLiteral("LastSync")).toLongLong(), QDateTime::currentSecsSinceEpoch());
 }
 
 QString Backend::stateText() const

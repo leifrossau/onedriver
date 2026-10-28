@@ -17,6 +17,8 @@ class Backend : public QObject
     Q_PROPERTY(QString account READ account NOTIFY statusChanged)
     Q_PROPERTY(QString stateText READ stateText NOTIFY statusChanged)
     Q_PROPERTY(QString stateIcon READ stateIcon NOTIFY statusChanged)
+    Q_PROPERTY(bool checking READ checking NOTIFY statusChanged)
+    Q_PROPERTY(QString checkText READ checkText NOTIFY statusChanged)
     Q_PROPERTY(bool isError READ isError NOTIFY statusChanged)
     Q_PROPERTY(bool paused READ paused NOTIFY statusChanged)
     Q_PROPERTY(QString quotaText READ quotaText NOTIFY statusChanged)
@@ -36,6 +38,10 @@ public:
     QString stateText() const;
     QString stateIcon() const;
     bool isError() const;
+    // a user requested check for changes is running (daemon interface v1.5, false before)
+    bool checking() const { return connected() && m_status.value(QStringLiteral("Checking")).toBool(); }
+    // "Checking for changes…" or "Checked 3 min ago"
+    QString checkText() const;
     bool paused() const { return m_status.value(QStringLiteral("Paused")).toBool(); }
     QString quotaText() const;
     double quotaFraction() const;
