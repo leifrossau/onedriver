@@ -207,6 +207,7 @@ const (
 	ActPause      = "pause"
 	ActResume     = "resume"
 	ActSyncNow    = "sync"
+	ActResync     = "resync"
 	ActLogin      = "login"
 	ActSettings   = "settings"
 	ActActivity   = "activity"
@@ -274,6 +275,7 @@ func instanceItems(i Instance) []*MenuItem {
 		m = append(m, item("Pause syncing", &Action{Kind: ActPause, Instance: i.BusName}))
 	}
 	m = append(m, item("Sync now", &Action{Kind: ActSyncNow, Instance: i.BusName}))
+	m = append(m, item("Refresh from OneDrive", &Action{Kind: ActResync, Instance: i.BusName}))
 	if q := QuotaText(i); q != "" {
 		m = append(m, info(q))
 	}

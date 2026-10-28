@@ -108,6 +108,7 @@ func TestMenuSingleInstance(t *testing.T) {
 	assert.Equal(t, &Action{ActOpenFolder, "x.A", "/home/u/OneDrive"}, find(m, "Open folder").Action)
 	assert.Equal(t, ActPause, find(m, "Pause syncing").Action.Kind)
 	assert.Equal(t, ActSyncNow, find(m, "Sync now").Action.Kind)
+	assert.Equal(t, ActResync, find(m, "Refresh from OneDrive").Action.Kind)
 	rec := find(m, "Recent files")
 	assert.Len(t, rec.Children, 2)
 	assert.Equal(t, "docs/a.txt (uploaded)", rec.Children[0].Label)

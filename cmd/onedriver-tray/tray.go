@@ -412,6 +412,19 @@ func (t *Tray) Do(a Action) {
 		t.Quit()
 	case ActLogin:
 		t.login(a.Instance)
+	case ActResync:
+		c, cancel := ctx()
+		defer cancel()
+		err := t.conn.Object(a.Instance, mountObj).CallWithContext(c, mountIface+".Resync", 0).Err
+		switch {
+		case err == nil:
+			t.notif.send(notification{Summary: "OneDrive", Body: "Refreshing everything from OneDrive...", Icon: "view-refresh"})
+		case isUnknownMethod(err):
+			t.notif.send(notification{Summary: "OneDrive", Body: "Not supported by this onedriver version", Icon: "dialog-information"})
+		default:
+			log.Warn().Err(err).Msg("Resync() failed.")
+			t.notif.send(notification{Summary: "OneDrive", Body: "Could not refresh: " + err.Error(), Icon: "dialog-error"})
+		}
 	case ActPause, ActResume, ActSyncNow:
 		method := map[string]string{ActPause: "Pause", ActResume: "Resume", ActSyncNow: "SyncNow"}[a.Kind]
 		c, cancel := ctx()

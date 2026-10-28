@@ -1,4 +1,4 @@
-# onedriver D-Bus interface (v1)
+# onedriver D-Bus interface (v1.4)
 
 Every running `onedriver` instance (one per mountpoint) exports a status and
 control interface on the **session bus**. It is used by `onedriver-tray` and
@@ -64,6 +64,7 @@ most once per second (coalesced).
 | `Pause` | `() → ()` | stop starting new uploads, delta polling and hydration. Writes still go to the local cache and are uploaded after `Resume`. |
 | `Resume` | `() → ()` | undo `Pause`, trigger a delta poll immediately |
 | `SyncNow` | `() → ()` | trigger a delta poll immediately |
+| `Resync` | `() → ()` | (v1.4) forget the delta position and enumerate the whole drive again, then poll right away. A full enumeration reports every item's current state, so items that a past poll missed are created in folders that are loaded. Items in loaded folders that the enumeration did not report are deleted locally if the server confirms (404) that they are gone; items with local changes, pending uploads or open files are never removed. If the enumeration fails halfway it is restarted from the beginning on the next poll. Clients should treat `org.freedesktop.DBus.Error.UnknownMethod` as "daemon too old". |
 | `GetRecent` | `(u limit) → a(sxs)` | recently synced items, newest first: (path relative to the mountpoint, unix time, action) where action is `uploaded`, `downloaded`, `deleted`, `conflict` or `error` |
 | `GetFileState` | `(s path) → (s state, b pinned)` | state as in the `user.onedriver.state` xattr, path is absolute or relative to the mountpoint |
 | `SetPinned` | `(s path, b pinned) → ()` | same as setting `user.onedriver.pinned` |

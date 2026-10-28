@@ -119,6 +119,7 @@ func (d *fakeDaemon) Pause() *dbus.Error   { return d.rec("Pause") }
 func (d *fakeDaemon) Resume() *dbus.Error  { return d.rec("Resume") }
 func (d *fakeDaemon) SyncNow() *dbus.Error { return d.rec("SyncNow") }
 func (d *fakeDaemon) Login() *dbus.Error   { return d.rec("Login") }
+func (d *fakeDaemon) Resync() *dbus.Error  { return d.rec("Resync") }
 
 // fakeNotifications is a stand-in for org.freedesktop.Notifications.
 type fakeNotifications struct {
@@ -489,4 +490,35 @@ func TestLoginMenuItemCallsLogin(t *testing.T) {
 		_, ok := e.layout(t).find(t, "Log in…")
 		return !ok
 	}, 3*time.Second, 50*time.Millisecond)
+}
+
+func TestResyncMenuItemCallsResync(t *testing.T) {
+	e := newEnv(t)
+	d := newFakeDaemon(t, e.addr, "home_u_A", "/home/u/A")
+	d.start(t)
+	require.Eventually(t, func() bool { return len(e.tray.Instances()) == 1 }, 3*time.Second, 20*time.Millisecond)
+	id, ok := e.layout(t).find(t, "Refresh from OneDrive")
+	require.True(t, ok, "menu item")
+	menu := e.client.Object(e.tray.sni.busName, menuPath)
+	require.NoError(t, menu.Call(menuIface+".Event", 0, id, "clicked", dbus.MakeVariant(""), uint32(0)).Err)
+	require.Eventually(t, func() bool { return len(d.called()) == 1 && d.called()[0] == "Resync" },
+		3*time.Second, 20*time.Millisecond)
+}
+
+func TestResyncOldDaemonShowsNotification(t *testing.T) {
+	e := newEnv(t)
+	d := newFakeDaemon(t, e.addr, "home_u_A", "/home/u/A")
+	require.NoError(t, d.conn.Export(oldDaemon{d}, mountObj, mountIface))
+	d.start(t)
+	require.Eventually(t, func() bool { return len(e.tray.Instances()) == 1 }, 3*time.Second, 20*time.Millisecond)
+	id, ok := e.layout(t).find(t, "Refresh from OneDrive")
+	require.True(t, ok, "menu item")
+	menu := e.client.Object(e.tray.sni.busName, menuPath)
+	require.NoError(t, menu.Call(menuIface+".Event", 0, id, "clicked", dbus.MakeVariant(""), uint32(0)).Err)
+	select {
+	case n := <-e.notifs.got:
+		assert.Contains(t, n.Body, "Not supported by this onedriver version")
+	case <-time.After(3 * time.Second):
+		t.Fatal("no notification")
+	}
 }

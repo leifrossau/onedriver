@@ -404,6 +404,14 @@ func (f *Filesystem) InsertID(id string, inode *Inode) uint64 {
 	// detector screams at us.
 	parent.Lock()
 	defer parent.Unlock()
+	if parent.children == nil {
+		// The folder was not listed yet. Adding a single entry would make
+		// the list look complete, and hide everything else in the folder
+		// from the first listing.
+		log.Debug().Str("parentID", parentID).Str("childID", id).
+			Msg("Not adding child to a folder that was not listed yet.")
+		return nodeID
+	}
 	for _, child := range parent.children {
 		if child == id {
 			// exit early, child cannot be added twice
@@ -469,6 +477,25 @@ func (f *Filesystem) GetChild(id string, name string, auth *graph.Auth) (*Inode,
 		}
 	}
 	return nil, errors.New("child does not exist")
+}
+
+// cachedChild looks up a named child among the children we already know,
+// without ever contacting the server. Folders whose children were not listed
+// yet have none.
+func (f *Filesystem) cachedChild(id string, name string) *Inode {
+	inode := f.GetID(id)
+	if inode == nil {
+		return nil
+	}
+	inode.RLock()
+	ids := append([]string(nil), inode.children...)
+	inode.RUnlock()
+	for _, childID := range ids {
+		if child := f.GetID(childID); child != nil && strings.EqualFold(child.Name(), name) {
+			return child
+		}
+	}
+	return nil
 }
 
 // GetChildrenID grabs all DriveItems that are the children of the given ID. If

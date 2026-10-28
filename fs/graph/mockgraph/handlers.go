@@ -448,8 +448,21 @@ func (s *Server) delta(w http.ResponseWriter, r *http.Request, t target) {
 	if u := q.Get("upto"); u != "" {
 		upto, _ = strconv.ParseInt(u, 10, 64)
 	}
+	// ?order=reverse lists the newest changes first (children before the
+	// folders they were created in), ?page=<n> sets the page size. Like
+	// ?fault, they are put on a client's delta link by a test and carried
+	// along by the nextLinks.
+	order, pageLimit := q.Get("order"), pageSize
+	carry := ""
+	if order != "" {
+		carry += "&order=" + order
+	}
+	if p, _ := strconv.Atoi(q.Get("page")); p > 0 {
+		pageLimit = p
+		carry += fmt.Sprintf("&page=%d", p)
+	}
 	link := func(token int64, extra string) string {
-		return fmt.Sprintf("%s/me/drive/root/delta?token=%d%s", s.GraphURL(), token, extra)
+		return fmt.Sprintf("%s/me/drive/root/delta?token=%d%s%s", s.GraphURL(), token, extra, carry)
 	}
 	var since int64
 	switch tok := q.Get("token"); tok {
@@ -466,16 +479,23 @@ func (s *Server) delta(w http.ResponseWriter, r *http.Request, t target) {
 
 	var changed []*node
 	for _, n := range s.nodes {
-		if n.seq > since && n.seq <= upto {
+		// like the real service, a full enumeration (no token) only reports
+		// what exists
+		if n.seq > since && n.seq <= upto && !(since == 0 && n.deleted) {
 			changed = append(changed, n)
 		}
 	}
-	sort.Slice(changed, func(i, j int) bool { return changed[i].seq < changed[j].seq })
+	sort.Slice(changed, func(i, j int) bool {
+		if order == "reverse" {
+			return changed[i].seq > changed[j].seq
+		}
+		return changed[i].seq < changed[j].seq
+	})
 	skip, _ := strconv.Atoi(q.Get("skip"))
 	if skip > len(changed) {
 		skip = len(changed)
 	}
-	end := skip + pageSize
+	end := skip + pageLimit
 	if end > len(changed) {
 		end = len(changed)
 	}
