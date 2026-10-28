@@ -4,6 +4,7 @@ package fs
 // private bus (the user's session bus is never touched).
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +45,9 @@ func TestKDirNotifyRemoteChanges(t *testing.T) {
 		for {
 			select {
 			case s := <-signals:
-				if s.Name == "org.kde.KDirNotify."+member {
+				// the mock drive is shared with parallel tests, whose changes
+				// to the mount root are announced as well
+				if s.Name == "org.kde.KDirNotify."+member && strings.Contains(fmt.Sprint(s.Body), "e2e_kdirnotify") {
 					assert.Equal(t, dbus.ObjectPath("/"), s.Path)
 					return s
 				}
@@ -99,9 +102,9 @@ func TestKDirNotifyRemoteChanges(t *testing.T) {
 		return ok
 	}, 20*time.Second, 100*time.Millisecond)
 	time.Sleep(3 * time.Second) // several delta polls and flushes
-	select {
-	case s := <-signals:
-		assert.Fail(t, "unexpected signal for a local change", "%s %v", s.Name, s.Body)
-	default:
+	for len(signals) > 0 {
+		if s := <-signals; strings.Contains(fmt.Sprint(s.Body), "e2e_kdirnotify") {
+			assert.Fail(t, "unexpected signal for a local change", "%s %v", s.Name, s.Body)
+		}
 	}
 }

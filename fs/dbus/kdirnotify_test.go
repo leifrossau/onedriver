@@ -17,7 +17,9 @@ func TestFileURL(t *testing.T) {
 
 func TestCoalesceRemote(t *testing.T) {
 	const m = "/mnt"
-	ch := func(kind, p, n string) status.RemoteChange { return status.RemoteChange{Kind: kind, Path: p, NewPath: n} }
+	ch := func(kind, p, n string) status.RemoteChange {
+		return status.RemoteChange{Kind: kind, Path: p, NewPath: n}
+	}
 
 	// one FilesAdded per folder, duplicates dropped, the root is ""
 	sig := CoalesceRemote(m, []status.RemoteChange{
