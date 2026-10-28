@@ -150,6 +150,28 @@ func (s *Service) loop() {
 	statesTicker := time.NewTicker(statesInterval)
 	defer statesTicker.Stop()
 	last := s.properties()
+	var checkEvents <-chan struct{}
+	if cn, ok := s.backend.(interface{ CheckingEvents() <-chan struct{} }); ok {
+		checkEvents = cn.CheckingEvents()
+	}
+	emitChanges := func() {
+		cur := s.properties()
+		changed := make(map[string]dbus.Variant)
+		for k, v := range cur {
+			if old, ok := last[k]; !ok || !reflect.DeepEqual(old.Value(), v.Value()) {
+				changed[k] = v
+			}
+		}
+		last = cur
+		if len(changed) == 0 {
+			return
+		}
+		err := s.conn.Emit(ObjectPath, propsIface+".PropertiesChanged",
+			Interface, changed, []string{})
+		if err != nil {
+			log.Debug().Err(err).Msg("Could not emit D-Bus PropertiesChanged signal.")
+		}
+	}
 	lastTransfers := s.backend.TransfersVersion()
 	for {
 		select {
@@ -177,22 +199,11 @@ func (s *Service) loop() {
 				log.Debug().Err(err).Msg("Could not emit D-Bus Notify signal.")
 			}
 		case <-ticker.C:
-			cur := s.properties()
-			changed := make(map[string]dbus.Variant)
-			for k, v := range cur {
-				if old, ok := last[k]; !ok || !reflect.DeepEqual(old.Value(), v.Value()) {
-					changed[k] = v
-				}
-			}
-			last = cur
-			if len(changed) == 0 {
-				continue
-			}
-			err := s.conn.Emit(ObjectPath, propsIface+".PropertiesChanged",
-				Interface, changed, []string{})
-			if err != nil {
-				log.Debug().Err(err).Msg("Could not emit D-Bus PropertiesChanged signal.")
-			}
+			emitChanges()
+		case <-checkEvents:
+			// Checking flipped: do not wait for the tick, a check that
+			// finds nothing is over in a moment
+			emitChanges()
 		}
 	}
 }
@@ -249,6 +260,7 @@ func (s *Service) properties() map[string]dbus.Variant {
 		"QuotaUsed":        v(st.QuotaUsed),
 		"QuotaTotal":       v(st.QuotaTotal),
 		"LastSync":         v(st.LastSync),
+		"Checking":         v(st.Checking),
 		"LastError":        v(st.LastError),
 		"AuthExpired":      v(st.AuthExpired),
 	}
@@ -459,7 +471,7 @@ func introspectionNode() *introspect.Node {
 					prop("MountPoint", "s"), prop("Account", "s"), prop("State", "s"),
 					prop("Paused", "b"), prop("PendingUploads", "u"), prop("PendingDownloads", "u"),
 					prop("PinnedFiles", "u"), prop("PinnedBytes", "t"), prop("CacheBytes", "t"),
-					prop("QuotaUsed", "t"), prop("QuotaTotal", "t"), prop("LastSync", "x"),
+					prop("QuotaUsed", "t"), prop("QuotaTotal", "t"), prop("LastSync", "x"), prop("Checking", "b"),
 					prop("LastError", "s"), prop("AuthExpired", "b"),
 				},
 			},

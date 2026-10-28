@@ -32,6 +32,7 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 	for { // eva
 		// no polling while paused, Resume and SyncNow wake us up
 		if f.Paused() {
+			f.cancelCheck()
 			if !f.sleepOrWake(time.Second) {
 				return
 			}
@@ -40,6 +41,7 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 
 		// no requests without a login, Login and SyncNow wake us up
 		if f.AuthExpired() {
+			f.endCheck(f.checkTicket()) // nothing can be polled
 			if !f.sleepOrWake(10 * time.Second) {
 				return
 			}
@@ -60,6 +62,7 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 		// A requested resync starts over with the complete enumeration. The
 		// request stays pending until a poll that began at the start
 		// succeeded, a failure halfway must not leave a half-done resync.
+		ticket := f.checkTicket()
 		fullEnum := f.resyncRequested()
 		if fullEnum {
 			log.Info().Msg("Resync requested, fetching a full delta.")
@@ -136,6 +139,7 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 			f.offline = false
 			f.Unlock()
 			f.noteSyncSuccess()
+			f.endCheck(ticket)
 
 			// never persist an unusable link, it would break the next startup
 			if f.deltaLink != "" {
@@ -152,6 +156,7 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 			// Shortened duration while offline, backing off so a throttled
 			// (429) or flapping server is not hammered. SyncNow cuts the wait
 			// short, so "Sync now" always retries right away.
+			f.endCheck(ticket)
 			failures++
 			shift := failures - 1
 			if shift > 4 {
@@ -231,7 +236,8 @@ func (f *Filesystem) applyDeltas(deltas map[string]*graph.DriveItem) {
 // longer exist on the server are removed.
 func (f *Filesystem) Resync() {
 	f.ctl.resync.Store(true)
-	f.SyncNow()
+	f.beginCheck(true)
+	f.wakeLoop()
 }
 
 func (f *Filesystem) resyncRequested() bool { return f.ctl.resync.Load() }

@@ -131,6 +131,36 @@ drain:
 	}, 10*time.Second, 100*time.Millisecond)
 	assert.NotZero(t, getStatus()["LastSync"].Value())
 
+	// SyncNow: Checking turns true and back to false, with signals for both
+	assert.Equal(t, false, getStatus()["Checking"].Value())
+	for len(signals) > 0 {
+		<-signals
+	}
+	lastSync := getStatus()["LastSync"].Value().(int64)
+	time.Sleep(1100 * time.Millisecond)
+	require.NoError(t, call("SyncNow").Err)
+	var sawTrue, sawFalse bool
+	checkDeadline := time.After(10 * time.Second)
+	for !sawFalse {
+		select {
+		case sig := <-signals:
+			if sig.Name != "org.freedesktop.DBus.Properties.PropertiesChanged" {
+				continue
+			}
+			if c, ok := sig.Body[1].(map[string]dbus.Variant)["Checking"]; ok {
+				if c.Value() == true {
+					sawTrue = true
+				} else if sawTrue {
+					sawFalse = true
+				}
+			}
+		case <-checkDeadline:
+			t.Fatalf("Checking did not go true then false (true=%v)", sawTrue)
+		}
+	}
+	assert.Equal(t, false, getStatus()["Checking"].Value())
+	assert.GreaterOrEqual(t, getStatus()["LastSync"].Value().(int64), lastSync)
+
 	// recent activity, newest first
 	var recent []struct {
 		Path   string
