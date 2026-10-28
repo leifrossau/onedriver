@@ -7,7 +7,7 @@
 # (or drop "#branch=..." for the default branch).
 
 pkgname=onedriver-fork
-pkgver=0.15.0.fork.1.r7.g24ece06
+pkgver=0.15.0.fork.1.r8.ga76bd5c
 pkgrel=1
 # the version scheme changed from 0.15.0.4.rN (upstream tag) to
 # 0.15.0.fork.N.rM (fork tags), which vercmp ranks lower; the epoch keeps

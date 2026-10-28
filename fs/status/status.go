@@ -17,6 +17,7 @@ const (
 	ActionUploaded   = "uploaded"
 	ActionDownloaded = "downloaded"
 	ActionDeleted    = "deleted"
+	ActionAdded      = "added" // appeared on the server, seen by a delta poll
 	ActionConflict   = "conflict"
 	ActionError      = "error"
 )

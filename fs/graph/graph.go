@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -86,7 +87,10 @@ func Request(resource string, auth *Auth, method string, content io.Reader, head
 	request := newRequest()
 	response, err := client.Do(request)
 	if err != nil {
-		// the actual request failed
+		// The actual request failed. Connections kept alive from before a
+		// suspend or a network change are dead, make sure the next attempt
+		// opens new ones instead of hanging on them.
+		http.DefaultClient.CloseIdleConnections()
 		return nil, err
 	}
 	body, _ := io.ReadAll(response.Body)
@@ -238,6 +242,12 @@ func GetDrive(auth *Auth) (Drive, error) {
 		return drive, err
 	}
 	return drive, json.Unmarshal(resp, &drive)
+}
+
+// IsResyncRequired reports whether err says the server no longer accepts a
+// delta token (410 Gone, "resyncRequired"), so the sync has to start over.
+func IsResyncRequired(err error) bool {
+	return err != nil && strings.HasPrefix(err.Error(), "HTTP 410 - ")
 }
 
 // IsOffline checks if an error string from Request() is indicative of being offline.

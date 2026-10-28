@@ -414,6 +414,36 @@ func (s *Server) delta(w http.ResponseWriter, r *http.Request, t target) {
 		return
 	}
 	q := r.URL.Query()
+	// Fault injection: only requests that carry a ?fault=<kind> marker (a test
+	// puts it on its own client's delta link) are affected, so tests sharing
+	// this server do not disturb each other.
+	if fault := q.Get("fault"); fault != "" {
+		s.faultMu.Lock()
+		s.faultHits[fault]++
+		s.faultMu.Unlock()
+		body := ""
+		switch fault {
+		case "html": // a captive portal answering instead of Graph
+			body = "<html>please log in to the wifi</html>"
+		case "empty":
+			body = "{}"
+		case "error": // an error object, but with status 200
+			body = `{"error":{"code":"generalException","message":"oops"}}`
+		case "truncated":
+			body = `{"value":[`
+		case "expired": // the token is no longer known
+			writeErr(w, 410, "resyncRequired", "The sync token is no longer valid.")
+			return
+		case "slow": // a normal answer, but late
+			time.Sleep(700 * time.Millisecond)
+		}
+		if body != "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			w.Write([]byte(body))
+			return
+		}
+	}
 	upto := s.seq
 	if u := q.Get("upto"); u != "" {
 		upto, _ = strconv.ParseInt(u, 10, 64)

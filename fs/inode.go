@@ -218,6 +218,14 @@ func (i *Inode) HasChanges() bool {
 	return i.hasChanges
 }
 
+// childrenKnown returns true if the list of children was fetched from the
+// server (or built locally), as opposed to not having been listed yet.
+func (i *Inode) childrenKnown() bool {
+	i.RLock()
+	defer i.RUnlock()
+	return i.children != nil
+}
+
 // HasChildren returns true if the item has more than 0 children
 func (i *Inode) HasChildren() bool {
 	i.RLock()

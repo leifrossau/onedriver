@@ -80,10 +80,21 @@ type Server struct {
 	dlCorrupt map[string]int           // item IDs whose next n content responses are corrupted
 	dlDelay   map[string]time.Duration // delay before serving content, by item ID
 
+	faultMu   sync.Mutex
+	faultHits map[string]int // delta requests carrying a ?fault= marker, by marker
+
 	reqMu      sync.Mutex
 	requests   []string
 	tokenMode  TokenMode
 	tokenForms []url.Values
+}
+
+// DeltaFaultHits returns how many delta requests carried the given fault
+// marker so far, see the delta handler.
+func (s *Server) DeltaFaultHits(fault string) int {
+	s.faultMu.Lock()
+	defer s.faultMu.Unlock()
+	return s.faultHits[fault]
 }
 
 // TokenMode selects how the token endpoint answers refresh_token grants.
@@ -122,6 +133,8 @@ func New() *Server {
 		paused:  make(map[string]bool),
 		failing: make(map[string]int),
 		failDL:  make(map[string]int),
+
+		faultHits: make(map[string]int),
 
 		dlBytes:   make(map[string]int64),
 		dlRanges:  make(map[string][]string),

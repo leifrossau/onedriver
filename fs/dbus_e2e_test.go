@@ -137,10 +137,22 @@ drain:
 		Time   int64
 		Action string
 	}
-	require.NoError(t, call("GetRecent", uint32(10)).Store(&recent))
-	require.NotEmpty(t, recent)
-	assert.Equal(t, "e2e_dbus/held.txt", recent[0].Path)
-	assert.Equal(t, "uploaded", recent[0].Action)
+	// other tests share the mock server, so their folders can show up as
+	// "added": look at this test's own entries only
+	ownRecent := func(n uint32) (paths, actions []string) {
+		require.NoError(t, call("GetRecent", n).Store(&recent))
+		for _, r := range recent {
+			if strings.HasPrefix(r.Path, "e2e_dbus/") {
+				paths = append(paths, r.Path)
+				actions = append(actions, r.Action)
+			}
+		}
+		return paths, actions
+	}
+	paths, actions := ownRecent(0)
+	require.NotEmpty(t, paths)
+	assert.Equal(t, "e2e_dbus/held.txt", paths[0])
+	assert.Equal(t, "uploaded", actions[0])
 	require.NoError(t, call("GetRecent", uint32(0)).Store(&recent))
 
 	// file state, relative and absolute paths
@@ -200,8 +212,9 @@ wait:
 	assert.Equal(t, "conflict", notify.Body[0])
 	assert.True(t, strings.HasPrefix(notify.Body[1].(string), "e2e_dbus/doc (conflict "), "%v", notify.Body[1])
 	assert.NotEmpty(t, notify.Body[2])
-	require.NoError(t, call("GetRecent", uint32(5)).Store(&recent))
-	assert.Equal(t, "conflict", recent[0].Action)
+	_, actions = ownRecent(0)
+	require.NotEmpty(t, actions)
+	assert.Equal(t, "conflict", actions[0])
 }
 
 type xfer struct {

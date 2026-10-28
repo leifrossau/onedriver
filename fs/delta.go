@@ -3,6 +3,8 @@ package fs
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -22,6 +24,10 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 		return
 	}
 	defer f.loops.Done()
+	// lastPoll deliberately has no monotonic reading (see below), failures
+	// counts consecutive failed polls for the retry backoff.
+	lastPoll := time.Now().Round(0)
+	failures := 0
 	for { // eva
 		// no polling while paused, Resume and SyncNow wake us up
 		if f.Paused() {
@@ -39,6 +45,17 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 			continue
 		}
 
+		// After a suspend the keep-alive connection from the last poll is dead,
+		// but the kernel does not know yet: the request would hang until the
+		// client timeout (a minute) and SyncNow could not help. The monotonic
+		// clock does not advance while suspended, the wall clock does, so a
+		// large wall-clock gap means we slept through something.
+		if time.Now().Round(0).Sub(lastPoll) > 2*interval+30*time.Second {
+			log.Info().Msg("Long gap since the last delta poll (suspend?), " +
+				"dropping idle connections.")
+			http.DefaultClient.CloseIdleConnections()
+		}
+
 		// get deltas
 		log.Trace().Msg("Fetching deltas from server.")
 		pollSuccess := false
@@ -49,6 +66,19 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 				// not the network's fault, the next round waits for the login
 				log.Debug().Msg("Delta fetch stopped, login expired.")
 				break
+			}
+			if graph.IsResyncRequired(err) && f.deltaLink != fullDeltaLink {
+				// The server forgot our delta token (410 Gone / resyncRequired),
+				// which happens after a long time without polling. Retrying the
+				// same link would fail forever, so start over with a complete
+				// enumeration. It reports every item's current state, so new
+				// and changed items are picked up (items deleted meanwhile are
+				// not reported, those linger until the folder is re-listed). A
+				// 410 on the full link itself is treated like any other error.
+				log.Warn().Err(err).
+					Msg("Delta token expired, resyncing from a full delta.")
+				f.deltaLink = fullDeltaLink
+				continue
 			}
 			if err != nil {
 				// the only thing that should be able to bring the FS out
@@ -91,7 +121,9 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 			f.SerializeAll()
 		}
 
+		lastPoll = time.Now().Round(0)
 		if pollSuccess {
+			failures = 0
 			f.Lock()
 			if f.offline {
 				log.Info().Msg("Delta fetch success, marking fs as online.")
@@ -100,22 +132,37 @@ func (f *Filesystem) DeltaLoop(interval time.Duration) {
 			f.Unlock()
 			f.noteSyncSuccess()
 
-			f.db.Batch(func(tx *bolt.Tx) error {
-				return tx.Bucket(bucketDelta).Put([]byte("deltaLink"), []byte(f.deltaLink))
-			})
+			// never persist an unusable link, it would break the next startup
+			if f.deltaLink != "" {
+				f.db.Batch(func(tx *bolt.Tx) error {
+					return tx.Bucket(bucketDelta).Put([]byte("deltaLink"), []byte(f.deltaLink))
+				})
+			}
 
 			// wait until next interval (or until SyncNow)
 			if !f.sleepOrWake(interval) {
 				return
 			}
 		} else {
-			// shortened duration while offline
-			if !f.sleep(2 * time.Second) {
+			// Shortened duration while offline, backing off so a throttled
+			// (429) or flapping server is not hammered. SyncNow cuts the wait
+			// short, so "Sync now" always retries right away.
+			failures++
+			shift := failures - 1
+			if shift > 4 {
+				shift = 4
+			}
+			wait := 2 * time.Second << uint(shift) // 2s .. 32s
+			if !f.sleepOrWake(wait) {
 				return
 			}
 		}
 	}
 }
+
+// fullDeltaLink starts a complete enumeration of the drive, used to recover when
+// the server no longer accepts our delta token.
+const fullDeltaLink = "/me/drive/root/delta"
 
 type deltaResponse struct {
 	NextLink  string             `json:"@odata.nextLink,omitempty"`
@@ -134,8 +181,15 @@ func (f *Filesystem) pollDeltas(auth *graph.Auth) ([]*graph.DriveItem, bool, err
 		return make([]*graph.DriveItem, 0), false, err
 	}
 
+	// A body we cannot make sense of (a captive portal's HTML page after a
+	// resume, a truncated response, an error object sent with status 200) must
+	// not touch deltaLink: replacing it with "" would make every later poll
+	// "succeed" without ever returning another change.
 	page := deltaResponse{}
-	json.Unmarshal(resp, &page)
+	if err := json.Unmarshal(resp, &page); err != nil {
+		return make([]*graph.DriveItem, 0), false,
+			fmt.Errorf("unreadable delta response: %w", err)
+	}
 
 	// If the server does not provide a `@odata.nextLink` item, it means we've
 	// reached the end of this polling cycle and should not continue until the
@@ -143,6 +197,11 @@ func (f *Filesystem) pollDeltas(auth *graph.Auth) ([]*graph.DriveItem, bool, err
 	if page.NextLink != "" {
 		f.deltaLink = strings.TrimPrefix(page.NextLink, graph.GraphURL)
 		return page.Values, true, nil
+	}
+	if page.DeltaLink == "" {
+		// every valid last page carries the link for the next poll
+		return make([]*graph.DriveItem, 0), false,
+			errors.New("delta response had neither a nextLink nor a deltaLink")
 	}
 	f.deltaLink = strings.TrimPrefix(page.DeltaLink, graph.GraphURL)
 	return page.Values, false, nil
@@ -182,6 +241,10 @@ func (f *Filesystem) applyDelta(delta *graph.DriveItem) error {
 func (f *Filesystem) applyDeltaItem(delta *graph.DriveItem) error {
 	id := delta.ID
 	name := delta.Name
+	if delta.Parent == nil {
+		// e.g. the drive root in a full enumeration, nothing to apply
+		return nil
+	}
 	parentID := delta.Parent.ID
 	ctx := log.With().
 		Str("id", id).
@@ -193,7 +256,8 @@ func (f *Filesystem) applyDeltaItem(delta *graph.DriveItem) error {
 	// diagnose and act on what type of delta we're dealing with
 
 	// do we have it at all?
-	if parent := f.GetID(parentID); parent == nil {
+	parent := f.GetID(parentID)
+	if parent == nil {
 		// Nothing needs to be applied, item not in cache, so latest copy will
 		// be pulled down next time it's accessed.
 		ctx.Trace().
@@ -263,9 +327,20 @@ func (f *Filesystem) applyDeltaItem(delta *graph.DriveItem) error {
 				}
 			}
 		} else {
+			// If we never listed the parent, inserting would make a partial
+			// children list look complete and hide its other entries. The
+			// first listing fetches everything, this item included.
+			if !parent.childrenKnown() {
+				ctx.Trace().Str("delta", "skip").
+					Msg("Skipping delta, parent folder was not listed yet.")
+				return nil
+			}
 			ctx.Info().Str("delta", "create").
 				Msg("Creating inode from delta.")
-			f.InsertChild(parentID, NewInodeDriveItem(delta))
+			created := NewInodeDriveItem(delta)
+			f.InsertChild(parentID, created)
+			f.recordActivity(created.Path(), status.ActionAdded)
+			f.stateChanged(id)
 			return nil
 		}
 	}
